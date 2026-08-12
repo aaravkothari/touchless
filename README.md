@@ -24,6 +24,9 @@ py -3.13 -m venv .venv
 
 # 3. drive the cursor
 .\.venv\Scripts\python.exe -m touchless run
+
+# or skip calibration entirely and point with your finger instead
+.\.venv\Scripts\python.exe -m touchless run --input hand
 ```
 
 On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/`.
@@ -45,15 +48,41 @@ On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/
 | `python -m touchless preview` | Camera + full telemetry (gaze, head angles, position, depth bar). If calibrated, also shows the predicted cursor point in a mini screen-rect. No cursor control. |
 | `python -m touchless calibrate` | Pursuit calibration: you follow the real moving mouse cursor for two ~60 s phases, three ML models compete on your data, then static check dots measure real accuracy in px before you save (`Enter`), redo (`r`), or abort (`Esc`). |
 | `python -m touchless retrain` | Refit the model from the last recorded session (`gaze_data.npz`) — no camera needed. For iterating on model code offline. |
-| `python -m touchless run [--click off\|dwell\|blink] [--log FILE.csv]` | Drive the cursor with the saved model. |
+| `python -m touchless run [--input gaze\|hand] [--click ...] [--log FILE.csv]` | Drive the cursor. `gaze` (default) uses the trained model; `hand` follows your right index finger with no calibration needed. |
 | `--camera N` (any command) | Use webcam index N if you have more than one. |
 
 ### Click methods
 
 - **`off`** (default) — cursor movement only.
-- **`dwell`** — hold the cursor still (within 45 px) for 1 s → left click.
-- **`blink`** — deliberately close both eyes for 0.25–1.5 s → left click.
+- **`dwell`** — hold the cursor still (within 45 px) for 1 s → left click. Works in both input modes.
+- **`blink`** — deliberately close both eyes for 0.25–1.5 s → left click (gaze mode only).
   Reflex blinks (~0.1 s) are ignored.
+- **`pinch`** — touch your right thumb and index fingertips together → left click (hand mode only).
+
+### Hand mode
+
+```powershell
+.\.venv\Scripts\python.exe -m touchless preview --input hand   # check hand detection first
+.\.venv\Scripts\python.exe -m touchless run --input hand --click pinch
+```
+
+An "air trackpad": the cursor follows your **right index fingertip** —
+`cursor = screen center + gain × (fingertip − anchor)` — so it's absolute
+(no drift), needs no training, and works immediately.
+
+- **Move**: point with your right index finger; small hand movements map to
+  large cursor movements (`hand_gain` in config).
+- **Recenter**: make a **fist with your left hand** (hold ~0.15 s). The
+  cursor snaps to the screen center *and* your current finger position
+  becomes the new neutral point — so you can reposition your arm anywhere
+  comfortable and keep going.
+- **Click**: `pinch` (thumb + index) or `dwell`.
+- If the pointer is lost the cursor holds still.
+
+One gotcha handled for you: MediaPipe labels hands assuming a mirrored
+image, and webcam frames aren't — so labels are swapped internally
+(`hand_labels_flipped` in config). If `preview --input hand` says RIGHT
+when you raise your *left* hand, flip that setting.
 
 ---
 
@@ -144,6 +173,7 @@ touchless/
 │   ├── app.py          main loops: preview / calibrate / retrain / run
 │   ├── config.py       ALL tunable parameters, documented
 │   ├── tracking.py     webcam + MediaPipe → FaceSample (the core contract)
+│   ├── hands.py        webcam + MediaPipe → HandSample (hand mode perception)
 │   ├── pursuit.py      moving-cursor trajectory + data collection
 │   ├── model.py        dataset build, lag search, model shootout, persistence
 │   ├── calibration.py  calibration UX: instructions, validation dots, accept/redo
@@ -203,6 +233,9 @@ recalibration. This is the main iteration surface now.
 | Model overfits phase 1 posture | move MORE during phase 2 | — |
 | Dwell clicks fire accidentally | `dwell_time_s` / `dwell_radius_px` | raise / lower |
 | Blink-clicks not detected | `blink_closed_threshold` | lower |
+| Hand cursor too twitchy / too sluggish | `hand_gain` | lower / raise |
+| Wrong hand labeled RIGHT in hand preview | `hand_labels_flipped` | flip |
+| Pinch clicks fire while pointing | `pinch_click_threshold` | lower |
 
 ### Known limitations (MVP)
 
