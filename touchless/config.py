@@ -1,6 +1,6 @@
 """Central tunables. Everything you'd want to tweak while iterating lives here."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -13,14 +13,17 @@ class Config:
     # --- Smoothing (One Euro filter) ---
     # Lower min_cutoff = smoother but laggier at rest.
     # Higher beta = less lag during fast movement (at the cost of jitter).
-    smooth_min_cutoff: float = 0.8
+    smooth_min_cutoff: float = 0.5
     smooth_beta: float = 0.6
 
     # --- Calibration ---
-    calib_grid: int = 4            # 4 -> 4x4 = 16 points
+    calib_grid: int = 4            # normal-posture stage: 4x4 = 16 dots
+    calib_stage_grid: int = 3      # lean-back / lean-in stages: 3x3 = 9 dots
     calib_margin: float = 0.08     # fraction of screen kept as border
-    calib_settle_s: float = 1.0    # time to let your gaze land on the dot
+    calib_glide_s: float = 0.35    # dot glides to its next position (eyes follow)
     calib_capture_s: float = 1.2   # time spent collecting samples per dot
+    calib_timeout_s: float = 5.0   # max wait for gaze to stabilize on a dot
+    calib_stability_std: float = 0.02  # gaze std (rolling 0.4s) below this = "landed"
     calib_file: str = "calibration.json"
     calib_mad_z: float = 2.5       # per-dot outlier rejection threshold
     # Ridge lambda is picked by leave-one-out CV over this grid:
@@ -28,6 +31,8 @@ class Config:
 
     # --- Prediction robustness ---
     pred_clamp: float = 0.15       # raw predictions clamped to [-x, 1+x]
+    blink_gate: float = 0.35       # blink score above this: hold cursor, drop
+                                   # calibration samples (blinks corrupt gaze)
 
     # --- Cursor ---
     screen_inset_px: int = 10      # keep cursor away from corners so

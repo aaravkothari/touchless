@@ -31,31 +31,51 @@ MODEL_URL = (
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "face_landmarker.task"
 
 # Order matters: this is the feature vector calibration learns over.
-FEATURE_NAMES = ("gaze_x", "gaze_y", "yaw", "pitch", "tx", "ty")
+FEATURE_NAMES = ("gaze_x", "gaze_y", "yaw", "pitch", "roll", "tx", "ty", "tz")
 
 
 @dataclass
 class FaceSample:
     ok: bool = False
-    features: np.ndarray | None = field(default=None)  # (6,) see FEATURE_NAMES
+    features: np.ndarray | None = field(default=None)  # (8,) see FEATURE_NAMES
     blink: float = 0.0    # mean eyeBlink blendshape, 0 (open) .. 1 (closed)
     landmarks: np.ndarray | None = field(default=None, repr=False)  # (478, 2) px
 
+    def _f(self, i: int) -> float:
+        return float(self.features[i]) if self.features is not None else 0.0
+
     @property
     def gaze_x(self) -> float:
-        return float(self.features[0]) if self.features is not None else 0.0
+        return self._f(0)
 
     @property
     def gaze_y(self) -> float:
-        return float(self.features[1]) if self.features is not None else 0.0
+        return self._f(1)
 
     @property
     def yaw(self) -> float:
-        return float(self.features[2]) if self.features is not None else 0.0
+        return self._f(2)
 
     @property
     def pitch(self) -> float:
-        return float(self.features[3]) if self.features is not None else 0.0
+        return self._f(3)
+
+    @property
+    def roll(self) -> float:
+        return self._f(4)
+
+    @property
+    def tx(self) -> float:
+        return self._f(5)
+
+    @property
+    def ty(self) -> float:
+        return self._f(6)
+
+    @property
+    def depth(self) -> float:
+        """Distance from camera, ~cm (the transformation matrix's -tz)."""
+        return self._f(7)
 
 
 def ensure_model() -> Path:
@@ -132,11 +152,13 @@ class FaceTracker:
         R = M[:3, :3]
         yaw = float(np.degrees(np.arctan2(-R[2, 0], np.hypot(R[2, 1], R[2, 2]))))
         pitch = float(np.degrees(np.arctan2(R[2, 1], R[2, 2])))
+        roll = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
         tx, ty = float(M[0, 3]), float(M[1, 3])  # head translation, ~cm
+        tz = float(-M[2, 3])                     # distance from camera, ~cm (+)
 
         return frame, FaceSample(
             ok=True,
-            features=np.array([gaze_x, gaze_y, yaw, pitch, tx, ty]),
+            features=np.array([gaze_x, gaze_y, yaw, pitch, roll, tx, ty, tz]),
             blink=(bs["eyeBlinkLeft"] + bs["eyeBlinkRight"]) / 2.0,
             landmarks=pts,
         )
