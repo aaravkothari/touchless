@@ -1,6 +1,6 @@
 # touchless
 
-Control your mouse cursor with your eyes (or head) using a plain webcam.
+Control your mouse cursor with your eyes + head using a plain webcam.
 
 This is the Python MVP of a project that will eventually become a Tauri app.
 The goal of this stage is to **finalize the tracking/control pipeline** —
@@ -15,10 +15,10 @@ calibration math, smoothing, click gestures — before any app-shell work.
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-# 1. sanity-check your camera and lighting (no mouse control)
+# 1. sanity-check your camera and lighting (no cursor control)
 .\.venv\Scripts\python.exe -m touchless preview
 
-# 2. calibrate (fullscreen dot sequence, ~25 seconds)
+# 2. calibrate (fullscreen dot sequence + accuracy check, ~1 min)
 .\.venv\Scripts\python.exe -m touchless calibrate
 
 # 3. drive the cursor
@@ -41,53 +41,44 @@ On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/
 
 | Command | What it does |
 |---|---|
-| `python -m touchless preview` | Show the camera with tracking overlay + live numbers. No cursor control. |
-| `python -m touchless calibrate [--mode gaze\|head]` | Fullscreen 9-dot calibration. Writes `calibration.json`. |
-| `python -m touchless run [--click off\|dwell\|blink]` | Drive the cursor using the saved calibration. |
+| `python -m touchless preview` | Camera + tracking overlay + live numbers. If calibrated, also shows the predicted cursor point in a mini screen-rect. No cursor control. |
+| `python -m touchless calibrate` | Fullscreen 16-dot calibration, then a 5-dot accuracy check. You see your real error in px before deciding to save (`Enter`), redo (`r`), or abort (`Esc`). |
+| `python -m touchless run [--click off\|dwell\|blink] [--log FILE.csv]` | Drive the cursor with the saved calibration. `--log` records features + predictions for offline analysis. |
 | `--camera N` (any command) | Use webcam index N if you have more than one. |
-
-### Modes
-
-- **`gaze`** (default) — iris position + head pose. More "eyes move the mouse",
-  but webcam gaze is inherently coarse: expect region-level accuracy, not
-  pixel-level.
-- **`head`** — head pose only (point your nose at the target). Noticeably more
-  stable; many hands-free-mouse users prefer it. Try both and compare.
-
-The mode is chosen **at calibration time** and stored inside `calibration.json`;
-`run` automatically uses whatever mode you calibrated with.
 
 ### Click methods
 
 - **`off`** (default) — cursor movement only.
 - **`dwell`** — hold the cursor still (within 45 px) for 1 s → left click.
 - **`blink`** — deliberately close both eyes for 0.25–1.5 s → left click.
-  Normal reflex blinks (~0.1 s) are ignored.
+  Normal reflex blinks (~0.1 s) are ignored. Uses the model's `eyeBlink`
+  blendshape score, visible live in `preview`.
 
 ---
 
 ## How it works
 
 ```
-webcam frame (OpenCV)
+webcam frame, 1280x720 (OpenCV)
    │
    ▼
-MediaPipe FaceLandmarker  ──►  478 face landmarks incl. iris centers
+MediaPipe FaceLandmarker
+   • 478 landmarks (drawn in preview)
+   • 52 blendshapes  ──►  eyeLook* (trained gaze coefficients), eyeBlink*
+   • facial transformation matrix  ──►  head yaw/pitch + translation
    │
    ▼
-feature extraction (tracking.py)
-   • gaze_x/gaze_y : iris offset from eye-corner midpoint, ÷ eye width
-   • yaw/pitch     : head pose from solvePnP on 6 rigid face points
-   • ear           : eye aspect ratio (blink detector input)
+feature vector (tracking.py)
+   [gaze_x, gaze_y, yaw, pitch, tx, ty]   — eyes AND head, fused
    │
    ▼
 calibration map (calibration.py)
-   degree-2 polynomial ridge regression: features ─► screen (x, y) in [0,1]
-   learned from you looking at 9 dots
+   z-score standardization → [1, z, z²] expansion (13 terms)
+   → ridge regression, lambda chosen by leave-one-out CV
+   → normalized screen (x, y)
    │
    ▼
-One Euro filter (smoothing.py)
-   adaptive smoothing: steady when you hold still, responsive when you flick
+robustness (app.py): clamp → median-of-3 → One Euro filter (smoothing.py)
    │
    ▼
 cursor (mouse.py) + click gestures (clicker.py)
@@ -95,29 +86,35 @@ cursor (mouse.py) + click gestures (clicker.py)
 
 ### Why each piece exists
 
-**Feature extraction.** Raw iris pixel positions are useless on their own —
-they move when your head moves, when you lean closer, etc. So we measure the
-iris *relative to the eye corners*, normalized by eye width (stable under
-distance changes). Head pose (yaw/pitch) is included in gaze mode because
-turning your head also shifts the iris in its socket; the regression needs
-both signals to disentangle "eyes moved" from "head moved".
+**Model-learned features, not geometry.** Gaze comes from MediaPipe's
+`eyeLook*` blendshapes (a network trained on humans looking around) and head
+pose from its facial transformation matrix. Earlier versions hand-computed
+iris offsets and solvePnP head pose — both were noisy enough to sink the
+whole pipeline. Head translation (tx, ty) is included so the mapping
+tolerates you shifting in your chair.
 
-**Calibration.** There is no universal formula mapping eye features to screen
-position — it depends on your screen size, sitting distance, and eye shape.
-So we learn a per-user mapping: you look at 9 known points, we record the
-median feature vector at each, then fit a small polynomial regression
-(degree 2, ridge-regularized so 9 points can't overfit the quadratic terms).
-The result is saved to `calibration.json`. **Recalibrate whenever you change
-posture, chair height, or lighting significantly.**
+**Standardization before regression.** The features mix scales (blendshapes
+~0.3, yaw ~30°, translation ~cm). Ridge regression with one penalty across
+raw scales silently crushes the small-scale signals — z-scoring first puts
+every signal on equal footing. The mean/std are stored in `calibration.json`.
 
-**Smoothing.** Landmark jitter would make the raw cursor unusable. A One Euro
-filter smooths adaptively: heavy filtering at low speed (rock-steady hover),
-light filtering at high speed (no lag when you look across the screen). This
-is the same filter class used in VR controllers.
+**A deliberately small model.** The expansion is linear + squared terms only
+(13 terms from 6 features) fit on 16 points. A full quadratic expansion has
+more terms than calibration dots and extrapolates violently between them —
+that bug looked like "the cursor flies off in some screen regions".
 
-**Clicking.** Dwell (hover-to-click) is the standard accessibility approach.
-Blink uses the eye-aspect-ratio: below ~0.18 the eye is closed; a closure
-lasting 0.25–1.5 s then reopening = intentional click.
+**Cross-validated regularization.** The ridge lambda is picked by
+leave-one-out CV on your calibration data instead of a hardcoded guess.
+
+**Validation before saving.** After fitting, you look at 5 fresh dots the
+fit has never seen, with the predicted point drawn live. You see mean/worst
+error in pixels and choose to save or redo. Garbage calibrations no longer
+save silently.
+
+**Robust prediction path.** Raw predictions are clamped (an off-screen
+fling can't wind up the filter), median-of-3 filtered (kills single-frame
+spikes), then One Euro smoothed (steady when you hold still, responsive
+when you flick — the same filter class VR controllers use).
 
 ---
 
@@ -130,12 +127,12 @@ touchless/
 │   ├── app.py          main loops for preview / calibrate / run
 │   ├── config.py       ALL tunable parameters, documented
 │   ├── tracking.py     webcam + MediaPipe → FaceSample (the core contract)
-│   ├── calibration.py  9-dot routine + polynomial ridge mapping
+│   ├── calibration.py  16-dot routine, ridge fit + LOOCV, validation pass
 │   ├── smoothing.py    One Euro filter
 │   ├── mouse.py        OS cursor wrapper (pyautogui)
 │   └── clicker.py      dwell + blink click state machines
 ├── models/             auto-downloaded MediaPipe model (gitignored)
-├── calibration.json    your personal calibration (gitignored)
+├── calibration.json    your personal calibration (gitignored, versioned)
 └── requirements.txt
 ```
 
@@ -148,37 +145,41 @@ calibration/smoothing/click logic.
 
 ## Testing & iterating
 
-### Verify tracking before anything else
+### 1. Verify tracking (`preview`)
 
-```powershell
-.\.venv\Scripts\python.exe -m touchless preview
-```
-
-You should see green dots on your eye corners and irises, and live numbers:
-
-- `gaze x/y` should move when you look left/right/up/down **without moving
-  your head** (x: roughly ±0.1 range; it's small — that's normal).
-- `yaw/pitch` should track your head turning. (Absolute values may look odd —
-  only *variation* matters; calibration absorbs offsets.)
-- `ear` should drop below ~0.18 when you close your eyes. If it doesn't,
-  tune `ear_closed_threshold` in `config.py`.
+- `gaze x/y` should move when you look around **without moving your head**.
+- `yaw/pitch` should track head turns with believable numbers (roughly ±30°).
+- `blink` should jump toward 1.0 when you close your eyes.
+- fps should be ≥ 20 at 720p. If not, set `frame_width/height` to 640×480
+  in `config.py`.
 
 If tracking is jittery here, fix it *here* first (lighting, camera position)
 — no amount of downstream tuning saves bad input. Face the light source;
 avoid strong backlight.
 
-### Evaluate accuracy after calibrating
+### 2. Calibrate and read the validation numbers
 
-Run with clicking off and try to "hit" things on screen with the cursor:
+The check screen reports mean/worst error in pixels. Rough guide on a
+1920-wide screen: **< 100 px mean is good** for webcam tracking, ~150 px is
+usable with dwell clicking, worse → hit `r` and redo (check posture and
+lighting first). Recalibrate whenever you change posture, chair height, or
+lighting significantly — it's under a minute.
+
+### 3. End-to-end drill
+
+Open Paint fullscreen, `run --click off`, try to park the cursor on each
+corner and the center. Tight cluster = good. Then turn on dwell and try
+actually using the machine.
+
+### 4. Offline iteration (no face required)
 
 ```powershell
-.\.venv\Scripts\python.exe -m touchless run --click off
+.\.venv\Scripts\python.exe -m touchless run --log session.csv
 ```
 
-A quick objective test: open MS Paint fullscreen, dwell on each corner and
-the center, see how tight the cursor cloud is at each. If accuracy is bad in
-one screen region only → recalibrate. If it's bad everywhere → try `head`
-mode, or sit closer to the camera.
+records `[t, features..., raw_x/y, smooth_x/y]` per frame. Replay it in a
+notebook to evaluate smoothing/mapping changes against recorded sessions
+instead of your live face.
 
 ### Tuning loop
 
@@ -190,23 +191,17 @@ actually touch:
 | Cursor jitters when holding still | `smooth_min_cutoff` | lower (e.g. 0.4) |
 | Cursor lags behind fast glances | `smooth_beta` | higher (e.g. 1.0) |
 | Dwell clicks fire accidentally | `dwell_time_s` / `dwell_radius_px` | raise / lower |
-| Blinks not detected | `ear_closed_threshold` | raise (check `ear` in preview) |
-| Calibration feels rushed | `calib_settle_s` | raise |
-
-There are no unit tests yet — the honest test harness for this project is
-`preview` (per-component signals) plus the Paint-corners drill (end-to-end).
-A good next step: log `(feature, prediction)` pairs during `run` and build a
-replay script so smoothing/mapping changes can be evaluated offline against
-recorded sessions instead of your live face.
+| Blinks not detected | `blink_closed_threshold` | lower (watch `blink` in preview) |
+| Validation error high everywhere | recalibrate; check lighting | — |
+| Fit feels over/under-constrained | `ridge_lambdas` grid | widen |
 
 ### Known limitations (MVP)
 
-- Webcam gaze ≈ 9-region accuracy, not pixel accuracy. For fine targets you
-  will want gaze-for-coarse + something else for fine (head micro-movements
-  work well; that's the hybrid most real systems use).
+- Physics still caps webcam gaze at region-level precision; the head-pose
+  component is what gives you fine control. The planned next lever is
+  **pursuit calibration** (follow a moving dot → hundreds of training
+  samples instead of 16) if the current accuracy isn't enough.
 - Single monitor assumed (uses primary screen size).
-- Calibration is sensitive to posture changes — recalibration takes 25 s,
-  use it liberally.
 - Windows-focused (tested there); macOS needs accessibility permissions for
   pyautogui, Linux needs X11.
 
@@ -214,10 +209,8 @@ recorded sessions instead of your live face.
 
 ## Roadmap → Tauri
 
-The plan this MVP feeds into:
-
-1. **Finalize pipeline here** — mode choice (gaze vs head vs hybrid),
-   click UX, smoothing constants. This is the hard, iterate-heavy part.
+1. **Finalize pipeline here** — accuracy, click UX, smoothing constants.
+   This is the hard, iterate-heavy part. *(you are here)*
 2. **Split engine from UI** — run the tracker as a headless process emitting
    `(x, y, click)` over a local WebSocket; a first "remote control" client
    proves the interface.
