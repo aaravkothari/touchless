@@ -30,3 +30,9 @@ class Cursor:
 
     def click(self):
         pyautogui.click()
+
+    def down(self, button: str = "left"):
+        pyautogui.mouseDown(button=button)
+
+    def up(self, button: str = "left"):
+        pyautogui.mouseUp(button=button)

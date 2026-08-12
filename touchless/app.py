@@ -16,14 +16,15 @@ import numpy as np
 import pyautogui
 
 from .calibration import run_calibration
-from .clicker import BlinkClicker, DwellClicker, PinchClicker
+from .camera import Camera
+from .clicker import BlinkClicker, DwellClicker, PinchHold
 from .config import Config
 from .hands import HandTracker
 from .model import GazeModel
 from .mouse import Cursor
 from .pursuit import PursuitData
 from .smoothing import OneEuro2D
-from .tracking import FaceTracker
+from .tracking import FaceSample, FaceTracker
 
 _HUD = cv2.FONT_HERSHEY_SIMPLEX
 # Eye corners + irises, drawn in the preview overlay.
@@ -86,17 +87,22 @@ def _face_hud_extras(s):
     return s.landmarks[list(_HUD_LANDMARKS)], s.depth
 
 
-def _hand_telemetry(s, fps, status):
+def _hand_telemetry(s, face, fps, status, held=None):
     lines = [f"{status}   {fps:4.1f} fps"]
     if s.pointer_ok:
-        lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, {s.pointer[1]:.2f})   "
-                     f"pinch {s.pinch:.2f}")
+        lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, {s.pointer[1]:.2f})  <- moves")
     else:
         lines.append("RIGHT hand: NOT FOUND (point with your right index finger)")
     if s.left_ok:
-        lines.append("LEFT  " + ("FIST (recenter!)" if s.left_fist else "open"))
+        lines.append(f"LEFT  pinch index {s.pinch_index:.2f}  middle {s.pinch_middle:.2f}"
+                     + (f"   [{held.upper()}-CLICK HELD]" if held else ""))
     else:
-        lines.append("LEFT  hand: not in view")
+        lines.append("LEFT  hand: not in view (it's the click hand)")
+    if face is not None and face.ok:
+        lines.append(f"FACE  jaw {face.jaw:.2f}  tongue {face.tongue:.2f}"
+                     + ("  <- RECENTER!" if face.tongue > 0.45 else ""))
+    else:
+        lines.append("FACE  not in view (tongue = recenter)")
     return lines
 
 
@@ -152,21 +158,49 @@ def preview(cfg: Config, input_mode: str = "gaze"):
         cv2.destroyAllWindows()
 
 
+class _HandStack:
+    """Shared camera + hand landmarker every frame + face landmarker every
+    Nth frame (tongue detection doesn't need full rate)."""
+
+    def __init__(self, cfg: Config):
+        self.camera = Camera(cfg)
+        self.hand = HandTracker(cfg, self.camera)
+        self.face = FaceTracker(cfg, self.camera)
+        self.every_n = max(cfg.face_every_n, 1)
+        self._i = 0
+        self._last_face = FaceSample()
+
+    def read(self):
+        frame = self.camera.read()
+        if frame is None:
+            return None, None, self._last_face
+        hs = self.hand.process(frame)
+        if self._i % self.every_n == 0:
+            self._last_face = self.face.process(frame)
+        self._i += 1
+        return frame, hs, self._last_face
+
+    def close(self):
+        self.hand.close()
+        self.face.close()
+        self.camera.close()
+
+
 def _preview_hand(cfg: Config):
-    tracker = HandTracker(cfg)
+    stack = _HandStack(cfg)
     fps = _Fps()
     try:
         while True:
-            frame, s = tracker.read()
+            frame, s, face = stack.read()
             if frame is None:
                 continue
-            lines = _hand_telemetry(s, fps.tick(), "hand preview - q to quit")
+            lines = _hand_telemetry(s, face, fps.tick(), "hand preview - q to quit")
             cv2.imshow("touchless preview",
                        _draw_hud(frame, lines, points=_hand_points(s)))
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
-        tracker.close()
+        stack.close()
         cv2.destroyAllWindows()
 
 
@@ -195,14 +229,13 @@ def retrain(cfg: Config):
 def run(cfg: Config, click_mode: str, log_path: str | None = None,
         input_mode: str = "gaze"):
     if input_mode == "hand":
-        if click_mode == "blink":
-            print("--click blink needs face tracking; hand mode supports "
-                  "--click off | dwell | pinch")
-            return
-        _run_hand(cfg, click_mode)
+        if click_mode != "off":
+            print("note: hand mode has a fixed control scheme (left-hand "
+                  "pinches click, tongue recenters) - ignoring --click")
+        _run_hand(cfg)
         return
     if click_mode == "pinch":
-        print("--click pinch needs hand tracking; gaze mode supports "
+        print("--click pinch is part of hand mode; gaze mode supports "
               "--click off | dwell | blink")
         return
     model = _load_model(cfg)
@@ -290,32 +323,47 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None,
         cv2.destroyAllWindows()
 
 
-def _run_hand(cfg: Config, click_mode: str):
+def _run_hand(cfg: Config):
     """Hand mode: cursor = center + gain * (right index tip - anchor).
 
     x is flipped so moving your hand right moves the cursor right on an
-    unmirrored frame. A left-hand fist re-anchors: the cursor snaps to the
-    screen center and your current finger position becomes the new neutral.
+    unmirrored frame. Controls: LEFT thumb+index pinch = left button,
+    LEFT thumb+middle pinch = right button (held pinch = held button),
+    tongue out = recenter + re-anchor.
     """
-    print(f"Hand mode, click={click_mode}.")
-    print("Point with your RIGHT index finger. LEFT fist recenters the cursor.")
+    print("Hand mode. RIGHT index finger moves the cursor.")
+    print("LEFT thumb+index pinch = left click (hold to drag).")
+    print("LEFT thumb+middle pinch = right click.")
+    print("Stick your TONGUE out to recenter the cursor.")
     print("Controls: q quits, space pauses (preview window must be focused).")
     print("Emergency stop: slam the mouse into the top-left corner.")
 
-    tracker = HandTracker(cfg)
+    stack = _HandStack(cfg)
     cursor = Cursor(cfg.screen_inset_px)
     smoother = OneEuro2D(cfg.smooth_min_cutoff, cfg.smooth_beta)
-    dwell = DwellClicker(cfg) if click_mode == "dwell" else None
-    pinch = PinchClicker(cfg) if click_mode == "pinch" else None
+    left_pinch = PinchHold(cfg)
+    right_pinch = PinchHold(cfg)
     fps = _Fps()
     anchor: np.ndarray | None = None
-    fist_since: float | None = None
+    tongue_since: float | None = None
     last_recenter = 0.0
+    held: str | None = None   # which mouse button is currently down
     paused = False
+
+    def press(button: str):
+        nonlocal held
+        cursor.down(button)
+        held = button
+
+    def release():
+        nonlocal held
+        if held is not None:
+            cursor.up(held)
+            held = None
 
     try:
         while True:
-            frame, s = tracker.read()
+            frame, s, face = stack.read()
             if frame is None:
                 continue
             now = time.monotonic()
@@ -326,18 +374,18 @@ def _run_hand(cfg: Config, click_mode: str):
                 if anchor is None:
                     anchor = s.pointer.copy()  # first sighting = neutral
 
-                # Left fist (held briefly) -> recenter and re-anchor.
-                if s.left_ok and s.left_fist:
-                    if fist_since is None:
-                        fist_since = now
-                    if (now - fist_since >= cfg.fist_hold_s
-                            and now - last_recenter >= cfg.fist_cooldown_s):
+                # Tongue out (held briefly) -> recenter and re-anchor.
+                if face.ok and face.tongue > cfg.tongue_threshold:
+                    if tongue_since is None:
+                        tongue_since = now
+                    if (now - tongue_since >= cfg.tongue_hold_s
+                            and now - last_recenter >= cfg.tongue_cooldown_s):
                         anchor = s.pointer.copy()
                         smoother.reset()
                         cursor.move_norm(0.5, 0.5)
                         last_recenter = now
                 else:
-                    fist_since = None
+                    tongue_since = None
 
                 d = s.pointer - anchor
                 nx = 0.5 - cfg.hand_gain * float(d[0])  # x flipped: mirror-natural
@@ -347,18 +395,28 @@ def _run_hand(cfg: Config, click_mode: str):
                 sx, sy = smoother.apply(nx, ny, now)
                 cursor.move_norm(sx, sy)
                 pred = (sx, sy)
-                if dwell is not None:
-                    px, py = cursor.position()
-                    if dwell.update(px, py):
-                        cursor.click()
-                if pinch is not None and pinch.update(s.pinch):
-                    cursor.click()
             else:
-                fist_since = None  # pointer lost: hold position, reset gesture
+                tongue_since = None  # pointer lost: hold position, reset gesture
 
-            lines = _hand_telemetry(s, fps.tick(), status)
-            if s.pointer_ok and dwell is not None and dwell.progress() > 0:
-                lines.append("dwell " + "#" * int(dwell.progress() * 10))
+            # Left-hand pinches -> mouse buttons. Lost hand = huge pinch
+            # value, so a held button always releases. While one button is
+            # held the other pinch is ignored (a full-hand grab can't fire
+            # both).
+            if not paused:
+                pi = s.pinch_index if s.left_ok else 9.9
+                pm = s.pinch_middle if s.left_ok else 9.9
+                ev_l = left_pinch.update(pi if held in (None, "left") else 9.9)
+                ev_r = right_pinch.update(pm if held in (None, "right") else 9.9)
+                if ev_l == "down" and held is None:
+                    press("left")
+                elif ev_l == "up" and held == "left":
+                    release()
+                if ev_r == "down" and held is None:
+                    press("right")
+                elif ev_r == "up" and held == "right":
+                    release()
+
+            lines = _hand_telemetry(s, face, fps.tick(), status, held)
             cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
                                               points=_hand_points(s)))
 
@@ -367,9 +425,14 @@ def _run_hand(cfg: Config, click_mode: str):
                 break
             if key == ord(" "):
                 paused = not paused
+                release()
                 smoother.reset()
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:
-        tracker.close()
+        try:
+            release()  # never leave a mouse button stuck down
+        except Exception:
+            pass
+        stack.close()
         cv2.destroyAllWindows()

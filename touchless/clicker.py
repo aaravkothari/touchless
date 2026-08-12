@@ -41,27 +41,33 @@ class DwellClicker:
         return min((time.monotonic() - self.anchor_t) / self.cfg.dwell_time_s, 1.0)
 
 
-class PinchClicker:
-    """Click when thumb and index tip pinch together (hand mode).
+class PinchHold:
+    """Pinch = mouse button, with hold support (hand mode).
 
-    Fires once per pinch: requires release above the threshold before the
-    next click, plus a cooldown.
+    Hysteresis: engages below pinch_click_threshold, releases only above
+    pinch_release_threshold — so a held pinch doesn't flutter mid-drag.
+    update() returns 'down' / 'up' on transitions, None otherwise. Feed a
+    huge value when the hand is lost and a held button always releases.
     """
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.was_pinched = False
-        self.last_click_t = 0.0
+        self.held = False
+        self.last_up_t = 0.0
 
-    def update(self, pinch: float) -> bool:
+    def update(self, pinch: float) -> str | None:
         now = time.monotonic()
-        pinched = pinch < self.cfg.pinch_click_threshold
-        fire = (pinched and not self.was_pinched
-                and now - self.last_click_t >= self.cfg.pinch_cooldown_s)
-        self.was_pinched = pinched
-        if fire:
-            self.last_click_t = now
-        return fire
+        if self.held:
+            if pinch > self.cfg.pinch_release_threshold:
+                self.held = False
+                self.last_up_t = now
+                return "up"
+            return None
+        if (pinch < self.cfg.pinch_click_threshold
+                and now - self.last_up_t >= self.cfg.pinch_refractory_s):
+            self.held = True
+            return "down"
+        return None
 
 
 class BlinkClicker:

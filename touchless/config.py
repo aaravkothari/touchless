@@ -48,14 +48,17 @@ class Config:
     screen_inset_px: int = 10      # keep cursor away from corners so
                                    # pyautogui's fail-safe stays user-triggered
 
-    # --- Hand mode (right index finger drives the cursor) ---
-    hand_gain: float = 1.8         # screen-widths moved per camera-width of finger travel
-    hand_labels_flipped: bool = True   # MediaPipe assumes a mirrored image; our
-                                       # frames aren't, so labels are swapped
-    fist_hold_s: float = 0.15      # left fist must hold this long to recenter
-    fist_cooldown_s: float = 0.6
-    pinch_click_threshold: float = 0.35  # thumb-index dist / hand size below = pinch
-    pinch_cooldown_s: float = 0.5
+    # --- Hand mode (right hand moves; left hand + face are the controls) ---
+    hand_gain: float = 3.2         # screen-widths moved per camera-width of finger travel
+    hand_labels_flipped: bool = False  # flip if preview labels your hands wrong
+    pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
+    pinch_release_threshold: float = 0.45  # ...and back above this = button UP
+    pinch_refractory_s: float = 0.15  # min gap between a release and next press
+    tongue_jaw_gate: float = 0.25  # jawOpen needed before tongue is even checked
+    tongue_threshold: float = 0.45  # tongue-pixel fraction above this = tongue out
+    tongue_hold_s: float = 0.2     # tongue must hold this long to recenter
+    tongue_cooldown_s: float = 1.0
+    face_every_n: int = 2          # run the face model every Nth frame in hand mode
 
     # --- Dwell click ---
     dwell_radius_px: int = 45      # cursor must stay inside this circle
