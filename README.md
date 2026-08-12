@@ -241,7 +241,7 @@ recalibration. This is the main iteration surface now.
 | Model overfits phase 1 posture | move MORE during phase 2 | — |
 | Dwell clicks fire accidentally | `dwell_time_s` / `dwell_radius_px` | raise / lower |
 | Blink-clicks not detected | `blink_closed_threshold` | lower |
-| Hand cursor covers too little / too much distance | `hand_gain` | raise / lower |
+| Hand cursor covers too little / too much distance | `hand_gain_x` / `hand_gain_y` | raise / lower per axis |
 | Hand cursor jitters when holding still | `hand_smooth_min_cutoff` | lower (e.g. 0.15) |
 | Hand cursor lags fast sweeps | `hand_smooth_beta` | raise (e.g. 1.0) |
 | Wrong hand labeled RIGHT in hand preview | `hand_labels_flipped` | flip |

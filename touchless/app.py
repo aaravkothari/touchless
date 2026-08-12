@@ -390,8 +390,8 @@ def _run_hand(cfg: Config):
                     tongue_since = None
 
                 d = s.pointer - anchor
-                nx = 0.5 - cfg.hand_gain * float(d[0])  # x flipped: mirror-natural
-                ny = 0.5 + cfg.hand_gain * float(d[1])
+                nx = 0.5 - cfg.hand_gain_x * float(d[0])  # x flipped: mirror-natural
+                ny = 0.5 + cfg.hand_gain_y * float(d[1])
                 nx = float(np.clip(nx, -cfg.pred_clamp, 1 + cfg.pred_clamp))
                 ny = float(np.clip(ny, -cfg.pred_clamp, 1 + cfg.pred_clamp))
                 raw_hist.append((nx, ny))

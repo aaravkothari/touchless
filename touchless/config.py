@@ -49,7 +49,8 @@ class Config:
                                    # pyautogui's fail-safe stays user-triggered
 
     # --- Hand mode (right hand moves; left hand + face are the controls) ---
-    hand_gain: float = 4.5         # screen-widths moved per camera-width of finger travel
+    hand_gain_x: float = 6.0       # horizontal: screen-widths per camera-width of travel
+    hand_gain_y: float = 4.5       # vertical (screens are wide - x needs more reach)
     # Hand mode gets its own One Euro tuning: high gain amplifies hand
     # tremor, so smoothing at rest is much heavier than in gaze mode while
     # beta keeps fast sweeps responsive.
