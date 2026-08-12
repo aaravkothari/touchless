@@ -5,9 +5,10 @@ mapping) consumes the FaceSample produced here, so if you swap the tracking
 backend later (e.g. an ONNX model in Rust for the Tauri port) this is the
 only contract that matters.
 
-Uses the MediaPipe Tasks API (mediapipe >= 1.0 removed the old
-mp.solutions.face_mesh API). The model file is downloaded automatically on
-first run into models/.
+Features come from the model itself, not hand-rolled geometry:
+  - gaze:      the 8 eyeLook* blendshapes (trained gaze coefficients)
+  - head pose: yaw/pitch + translation from the facial transformation matrix
+  - blink:     the eyeBlink* blendshapes
 """
 
 import time
@@ -29,35 +30,32 @@ MODEL_URL = (
 )
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "face_landmarker.task"
 
-# FaceLandmarker landmark indices (478 points; 468-477 are the irises).
-# "Right"/"left" are the subject's right/left, which appear on the image's
-# left/right respectively when the frame is not mirrored.
-R_OUTER, R_INNER, R_TOP, R_BOTTOM, R_IRIS = 33, 133, 159, 145, 468
-L_INNER, L_OUTER, L_TOP, L_BOTTOM, L_IRIS = 362, 263, 386, 374, 473
-
-# Landmarks used for head-pose estimation via solvePnP.
-POSE_IDS = [1, 152, 263, 33, 291, 61]  # nose, chin, eye corners, mouth corners
-
-# Generic 3D face model points matching POSE_IDS (millimetres, arbitrary origin).
-POSE_MODEL = np.array([
-    [0.0, 0.0, 0.0],        # nose tip
-    [0.0, -63.6, -12.5],    # chin
-    [-43.3, 32.7, -26.0],   # left eye outer corner
-    [43.3, 32.7, -26.0],    # right eye outer corner
-    [-28.9, -28.9, -24.1],  # left mouth corner
-    [28.9, -28.9, -24.1],   # right mouth corner
-], dtype=np.float64)
+# Order matters: this is the feature vector calibration learns over.
+FEATURE_NAMES = ("gaze_x", "gaze_y", "yaw", "pitch", "tx", "ty")
 
 
 @dataclass
 class FaceSample:
     ok: bool = False
-    gaze_x: float = 0.0   # iris offset within the eyes, normalized, + = subject's left
-    gaze_y: float = 0.0   # + = down
-    yaw: float = 0.0      # head rotation, degrees, + = subject looks to their left
-    pitch: float = 0.0    # degrees, + = looks down
-    ear: float = 0.0      # eye aspect ratio, averaged over both eyes (blink = low)
+    features: np.ndarray | None = field(default=None)  # (6,) see FEATURE_NAMES
+    blink: float = 0.0    # mean eyeBlink blendshape, 0 (open) .. 1 (closed)
     landmarks: np.ndarray | None = field(default=None, repr=False)  # (478, 2) px
+
+    @property
+    def gaze_x(self) -> float:
+        return float(self.features[0]) if self.features is not None else 0.0
+
+    @property
+    def gaze_y(self) -> float:
+        return float(self.features[1]) if self.features is not None else 0.0
+
+    @property
+    def yaw(self) -> float:
+        return float(self.features[2]) if self.features is not None else 0.0
+
+    @property
+    def pitch(self) -> float:
+        return float(self.features[3]) if self.features is not None else 0.0
 
 
 def ensure_model() -> Path:
@@ -68,21 +66,6 @@ def ensure_model() -> Path:
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Done.")
     return MODEL_PATH
-
-
-def _eye_features(pts: np.ndarray, outer: int, inner: int, top: int,
-                  bottom: int, iris: int) -> tuple[float, float, float]:
-    """Return (iris_dx, iris_dy, ear) for one eye.
-
-    The iris offset is measured from the eye-corner midpoint and normalized
-    by eye width, which is stable under distance changes and (unlike eye
-    height) doesn't collapse when the lids move.
-    """
-    width = float(np.linalg.norm(pts[outer] - pts[inner])) + 1e-9
-    center = (pts[outer] + pts[inner]) / 2.0
-    dx, dy = (pts[iris] - center) / width
-    ear = float(np.linalg.norm(pts[top] - pts[bottom])) / width
-    return float(dx), float(dy), ear
 
 
 class FaceTracker:
@@ -106,6 +89,8 @@ class FaceTracker:
                 num_faces=1,
                 min_face_detection_confidence=0.5,
                 min_tracking_confidence=0.5,
+                output_face_blendshapes=True,
+                output_facial_transformation_matrixes=True,
             )
         )
         self._t0 = time.monotonic()
@@ -123,7 +108,8 @@ class FaceTracker:
         ts_ms = max(int((time.monotonic() - self._t0) * 1000), self._last_ts_ms + 1)
         self._last_ts_ms = ts_ms
         result = self.landmarker.detect_for_video(mp_image, ts_ms)
-        if not result.face_landmarks:
+        if not (result.face_landmarks and result.face_blendshapes
+                and result.facial_transformation_matrixes):
             return frame, FaceSample()
 
         h, w = frame.shape[:2]
@@ -131,36 +117,29 @@ class FaceTracker:
             [(lm.x * w, lm.y * h) for lm in result.face_landmarks[0]],
             dtype=np.float64,
         )
+        bs = {c.category_name: c.score for c in result.face_blendshapes[0]}
 
-        r_dx, r_dy, r_ear = _eye_features(pts, R_OUTER, R_INNER, R_TOP, R_BOTTOM, R_IRIS)
-        l_dx, l_dy, l_ear = _eye_features(pts, L_OUTER, L_INNER, L_TOP, L_BOTTOM, L_IRIS)
-        yaw, pitch = self._head_pose(pts, w, h)
+        # Gaze: + gaze_x = subject looks to their left, + gaze_y = looks down.
+        # (Sign conventions don't actually matter — calibration learns the map —
+        # but consistent semantics make the preview HUD interpretable.)
+        gaze_x = (bs["eyeLookOutLeft"] + bs["eyeLookInRight"]
+                  - bs["eyeLookInLeft"] - bs["eyeLookOutRight"]) / 2.0
+        gaze_y = (bs["eyeLookDownLeft"] + bs["eyeLookDownRight"]
+                  - bs["eyeLookUpLeft"] - bs["eyeLookUpRight"]) / 2.0
+
+        # Head pose from the facial transformation matrix (stable, model-learned).
+        M = np.array(result.facial_transformation_matrixes[0], dtype=np.float64)
+        R = M[:3, :3]
+        yaw = float(np.degrees(np.arctan2(-R[2, 0], np.hypot(R[2, 1], R[2, 2]))))
+        pitch = float(np.degrees(np.arctan2(R[2, 1], R[2, 2])))
+        tx, ty = float(M[0, 3]), float(M[1, 3])  # head translation, ~cm
 
         return frame, FaceSample(
             ok=True,
-            gaze_x=(r_dx + l_dx) / 2.0,
-            gaze_y=(r_dy + l_dy) / 2.0,
-            yaw=yaw,
-            pitch=pitch,
-            ear=(r_ear + l_ear) / 2.0,
+            features=np.array([gaze_x, gaze_y, yaw, pitch, tx, ty]),
+            blink=(bs["eyeBlinkLeft"] + bs["eyeBlinkRight"]) / 2.0,
             landmarks=pts,
         )
-
-    def _head_pose(self, pts: np.ndarray, w: int, h: int) -> tuple[float, float]:
-        """Estimate (yaw, pitch) in degrees with solvePnP and a generic face model."""
-        image_pts = pts[POSE_IDS]
-        focal = float(w)  # rough pinhole approximation, fine for relative pose
-        cam = np.array([[focal, 0, w / 2], [0, focal, h / 2], [0, 0, 1]], dtype=np.float64)
-        ok, rvec, _ = cv2.solvePnP(
-            POSE_MODEL, image_pts, cam, np.zeros(4), flags=cv2.SOLVEPNP_ITERATIVE
-        )
-        if not ok:
-            return 0.0, 0.0
-        rot, _ = cv2.Rodrigues(rvec)
-        # Decompose: yaw around Y, pitch around X.
-        yaw = float(np.degrees(np.arctan2(-rot[2, 0], np.sqrt(rot[2, 1] ** 2 + rot[2, 2] ** 2))))
-        pitch = float(np.degrees(np.arctan2(rot[2, 1], rot[2, 2])))
-        return yaw, pitch
 
     def close(self):
         self.landmarker.close()
