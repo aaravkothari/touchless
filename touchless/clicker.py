@@ -45,6 +45,7 @@ class BlinkClicker:
     """Click on a deliberate blink: eyes closed for blink_min_s..blink_max_s.
 
     Reflex blinks (~0.1-0.15 s) fall under blink_min_s and are ignored.
+    Input is the model's eyeBlink blendshape score (0 open .. 1 closed).
     """
 
     def __init__(self, cfg: Config):
@@ -52,9 +53,9 @@ class BlinkClicker:
         self.closed_since: float | None = None
         self.last_click_t = 0.0
 
-    def update(self, ear: float) -> bool:
+    def update(self, blink: float) -> bool:
         now = time.monotonic()
-        closed = ear < self.cfg.ear_closed_threshold
+        closed = blink > self.cfg.blink_closed_threshold
 
         if closed:
             if self.closed_since is None:
