@@ -2,7 +2,7 @@
 
 Three modes:
   preview   - visualize tracking, no cursor control (safe playground)
-  calibrate - fullscreen dot sequence + validation, writes calibration.json
+  calibrate - 3-posture dot sequence + validation, writes calibration.json
   run       - actually drive the cursor (requires calibration first)
 """
 
@@ -25,28 +25,55 @@ from .tracking import FaceTracker
 _HUD = cv2.FONT_HERSHEY_SIMPLEX
 # Eye corners + irises, drawn in the preview overlay.
 _HUD_LANDMARKS = (33, 133, 159, 145, 468, 362, 263, 386, 374, 473)
+# Depth bar range (cm) — sitting distances land inside this comfortably.
+_DEPTH_LO, _DEPTH_HI = 20.0, 100.0
 
 
-def _draw_hud(frame, sample, lines, pred=None):
-    """Mirror the frame for display, overlay tracking info.
+def _telemetry(s, cfg, fps, status):
+    """The 'everything we track' readout: gaze, head angles, position, depth."""
+    lines = [f"{status}   {fps:4.1f} fps"]
+    if not s.ok:
+        lines.append("NO FACE")
+        return lines
+    blink_state = "CLOSED" if s.blink > cfg.blink_gate else "open"
+    lines += [
+        f"gaze  x {s.gaze_x:+.3f}  y {s.gaze_y:+.3f}   blink {s.blink:.2f} {blink_state}",
+        f"head  yaw {s.yaw:+5.1f}  pitch {s.pitch:+5.1f}  roll {s.roll:+5.1f}",
+        f"pos   x {s.tx:+5.1f}cm  y {s.ty:+5.1f}cm  depth {s.depth:4.1f}cm",
+    ]
+    return lines
 
-    pred: optional normalized (x, y) prediction, drawn in a mini screen-rect
-    in the top-right corner so you can see where the cursor would go.
+
+def _draw_hud(frame, sample, lines, pred=None, scale=1.0):
+    """Mirror + optionally downscale the frame, overlay tracking info.
+
+    pred: normalized (x, y) prediction, drawn in a mini screen-rect (top
+    right) so you can see where the cursor would go. A depth bar is drawn
+    under the text when a face is tracked.
     """
     view = cv2.flip(frame, 1)
+    if scale != 1.0:
+        view = cv2.resize(view, (int(view.shape[1] * scale), int(view.shape[0] * scale)))
     h, w = view.shape[:2]
     if sample.ok and sample.landmarks is not None:
         for i in _HUD_LANDMARKS:
             x, y = sample.landmarks[i]
-            cv2.circle(view, (w - 1 - int(x), int(y)), 2, (0, 220, 0), -1)
+            cv2.circle(view, (w - 1 - int(x * scale), int(y * scale)), 2, (0, 220, 0), -1)
     for n, line in enumerate(lines):
-        cv2.putText(view, line, (10, 24 + n * 24), _HUD, 0.6, (0, 220, 220), 1)
+        cv2.putText(view, line, (10, 24 + n * 24), _HUD, 0.55, (0, 220, 220), 1)
+    if sample.ok:
+        # Depth bar: watch yourself lean in/out.
+        y0 = 24 + len(lines) * 24
+        frac = float(np.clip((sample.depth - _DEPTH_LO) / (_DEPTH_HI - _DEPTH_LO), 0, 1))
+        cv2.rectangle(view, (10, y0), (10 + 150, y0 + 10), (80, 80, 80), 1)
+        cv2.rectangle(view, (10, y0), (10 + int(150 * frac), y0 + 10), (0, 220, 220), -1)
+        cv2.putText(view, "depth", (168, y0 + 10), _HUD, 0.45, (150, 150, 150), 1)
     if pred is not None:
         rw, rh = w // 4, h // 4
-        x0, y0 = w - rw - 10, 10
-        cv2.rectangle(view, (x0, y0), (x0 + rw, y0 + rh), (80, 80, 80), 1)
+        x0 = w - rw - 10
+        cv2.rectangle(view, (x0, 10), (x0 + rw, 10 + rh), (80, 80, 80), 1)
         px = x0 + int(np.clip(pred[0], 0, 1) * rw)
-        py = y0 + int(np.clip(pred[1], 0, 1) * rh)
+        py = 10 + int(np.clip(pred[1], 0, 1) * rh)
         cv2.drawMarker(view, (px, py), (255, 0, 255), cv2.MARKER_CROSS, 12, 2)
     return view
 
@@ -61,32 +88,31 @@ def _load_map(cfg: Config) -> CalibrationMap | None:
         return None
 
 
+class _Fps:
+    def __init__(self):
+        self.t = deque(maxlen=30)
+
+    def tick(self) -> float:
+        self.t.append(time.monotonic())
+        if len(self.t) < 2:
+            return 0.0
+        return (len(self.t) - 1) / (self.t[-1] - self.t[0])
+
+
 def preview(cfg: Config):
     """Show tracking output. Use this to verify lighting/camera before calibrating."""
     cmap = _load_map(cfg)  # optional: shows live prediction if calibrated
     tracker = FaceTracker(cfg)
-    fps_t, fps = deque(maxlen=30), 0.0
+    fps = _Fps()
     try:
         while True:
             frame, s = tracker.read()
             if frame is None:
                 continue
-            fps_t.append(time.monotonic())
-            if len(fps_t) > 1:
-                fps = (len(fps_t) - 1) / (fps_t[-1] - fps_t[0])
-            lines = [f"preview - q to quit   {fps:4.1f} fps"]
-            pred = None
-            if s.ok:
-                lines += [
-                    f"gaze  x {s.gaze_x:+.3f}  y {s.gaze_y:+.3f}",
-                    f"head  yaw {s.yaw:+5.1f}  pitch {s.pitch:+5.1f}",
-                    f"blink {s.blink:.2f}  ({'CLOSED' if s.blink > cfg.blink_closed_threshold else 'open'})",
-                ]
-                if cmap is not None:
-                    pred = cmap.predict(s.features)
-                    lines.append(f"pred  ({pred[0]:+.2f}, {pred[1]:+.2f})")
-            else:
-                lines.append("NO FACE")
+            lines = _telemetry(s, cfg, fps.tick(), "preview - q to quit")
+            pred = cmap.predict(s.features) if (cmap is not None and s.ok) else None
+            if pred is not None:
+                lines.append(f"pred  ({pred[0]:+.2f}, {pred[1]:+.2f})")
             cv2.imshow("touchless preview", _draw_hud(frame, s, lines, pred))
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
@@ -120,6 +146,7 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
     smoother = OneEuro2D(cfg.smooth_min_cutoff, cfg.smooth_beta)
     dwell = DwellClicker(cfg) if click_mode == "dwell" else None
     blink = BlinkClicker(cfg) if click_mode == "blink" else None
+    fps = _Fps()
     raw_hist: deque[tuple[float, float]] = deque(maxlen=3)  # spike pre-filter
     paused = False
 
@@ -127,7 +154,8 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
     if log_path:
         log_fh = open(log_path, "w", newline="")
         log_writer = csv.writer(log_fh)
-        log_writer.writerow(["t", "gaze_x", "gaze_y", "yaw", "pitch", "tx", "ty",
+        log_writer.writerow(["t", "gaze_x", "gaze_y", "yaw", "pitch", "roll",
+                             "tx", "ty", "tz", "blink",
                              "raw_x", "raw_y", "smooth_x", "smooth_y"])
 
     try:
@@ -136,9 +164,12 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
             if frame is None:
                 continue
 
-            status = "PAUSED (space to resume)" if paused else "LIVE"
+            status = "PAUSED (space to resume)" if paused else "LIVE - q quit, space pause"
             pred = None
-            if s.ok and not paused:
+            blinking = s.ok and s.blink > cfg.blink_gate
+            if s.ok and not paused and not blinking:
+                # Blink gating: while eyes are closed the gaze blendshapes go
+                # wild, so the cursor holds position instead of jumping.
                 nx, ny = cmap.predict(s.features)
                 # Clamp before smoothing so an off-screen fling can't wind up
                 # the filter, then median-of-3 to kill single-frame spikes.
@@ -152,22 +183,20 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
                 pred = (sx, sy)
                 if log_writer is not None:
                     log_writer.writerow(
-                        [f"{time.monotonic():.3f}", *(f"{v:.4f}" for v in s.features),
+                        [f"{time.monotonic():.3f}",
+                         *(f"{v:.4f}" for v in s.features), f"{s.blink:.3f}",
                          f"{nx:.4f}", f"{ny:.4f}", f"{sx:.4f}", f"{sy:.4f}"])
                 if dwell is not None:
                     px, py = cursor.position()
                     if dwell.update(px, py):
                         cursor.click()
-                if blink is not None and blink.update(s.blink):
-                    cursor.click()
+            if s.ok and not paused and blink is not None and blink.update(s.blink):
+                cursor.click()
 
-            lines = [f"{status} - q quit, space pause"]
-            if not s.ok:
-                lines.append("NO FACE")
-            elif dwell is not None and dwell.progress() > 0:
+            lines = _telemetry(s, cfg, fps.tick(), status)
+            if s.ok and dwell is not None and dwell.progress() > 0:
                 lines.append("dwell " + "#" * int(dwell.progress() * 10))
-            view = _draw_hud(frame, s, lines, pred)
-            cv2.imshow("touchless", cv2.resize(view, (view.shape[1] // 2, view.shape[0] // 2)))
+            cv2.imshow("touchless", _draw_hud(frame, s, lines, pred, scale=0.5))
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
