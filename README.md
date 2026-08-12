@@ -4,7 +4,8 @@ Control your mouse cursor with your eyes + head using a plain webcam.
 
 This is the Python MVP of a project that will eventually become a Tauri app.
 The goal of this stage is to **finalize the tracking/control pipeline** —
-calibration math, smoothing, click gestures — before any app-shell work.
+calibration, the learned gaze model, smoothing, click gestures — before any
+app-shell work.
 
 ---
 
@@ -18,7 +19,7 @@ py -3.13 -m venv .venv
 # 1. sanity-check your camera and lighting (no cursor control)
 .\.venv\Scripts\python.exe -m touchless preview
 
-# 2. calibrate (3-posture dot sequence + accuracy check, ~2 min)
+# 2. calibrate: follow the moving cursor with your eyes (~2.5 min)
 .\.venv\Scripts\python.exe -m touchless calibrate
 
 # 3. drive the cursor
@@ -42,8 +43,9 @@ On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/
 | Command | What it does |
 |---|---|
 | `python -m touchless preview` | Camera + full telemetry (gaze, head angles, position, depth bar). If calibrated, also shows the predicted cursor point in a mini screen-rect. No cursor control. |
-| `python -m touchless calibrate` | 3-posture calibration (16 dots sitting normally, 9 leaned back, 9 leaned in), then an accuracy check at normal posture *and* leaned back. You see your real error in px before deciding to save (`Enter`), redo (`r`), or abort (`Esc`). |
-| `python -m touchless run [--click off\|dwell\|blink] [--log FILE.csv]` | Drive the cursor with the saved calibration. `--log` records features + predictions for offline analysis. |
+| `python -m touchless calibrate` | Pursuit calibration: you follow the real moving mouse cursor for two ~60 s phases, three ML models compete on your data, then static check dots measure real accuracy in px before you save (`Enter`), redo (`r`), or abort (`Esc`). |
+| `python -m touchless retrain` | Refit the model from the last recorded session (`gaze_data.npz`) — no camera needed. For iterating on model code offline. |
+| `python -m touchless run [--click off\|dwell\|blink] [--log FILE.csv]` | Drive the cursor with the saved model. |
 | `--camera N` (any command) | Use webcam index N if you have more than one. |
 
 ### Click methods
@@ -51,8 +53,7 @@ On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/
 - **`off`** (default) — cursor movement only.
 - **`dwell`** — hold the cursor still (within 45 px) for 1 s → left click.
 - **`blink`** — deliberately close both eyes for 0.25–1.5 s → left click.
-  Normal reflex blinks (~0.1 s) are ignored. Uses the model's `eyeBlink`
-  blendshape score, visible live in `preview`.
+  Reflex blinks (~0.1 s) are ignored.
 
 ---
 
@@ -62,20 +63,15 @@ On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/
 webcam frame, 1280x720 (OpenCV)
    │
    ▼
-MediaPipe FaceLandmarker
-   • 478 landmarks (drawn in preview)
-   • 52 blendshapes  ──►  eyeLook* (trained gaze coefficients), eyeBlink*
-   • facial transformation matrix  ──►  yaw/pitch/roll + x/y/depth position
+MediaPipe FaceLandmarker (tracking.py)
+   blendshapes ─► gaze coefficients + blink;  transform matrix ─► yaw/pitch/roll + x/y/depth
    │
    ▼
-feature vector (tracking.py)
-   [gaze_x, gaze_y, yaw, pitch, roll, tx, ty, tz]   — eyes AND full head pose
+feature vector: [gaze_x, gaze_y, yaw, pitch, roll, tx, ty, tz]
    │
    ▼
-calibration map (calibration.py)
-   17 design terms incl. tz×(gaze,yaw,pitch) depth interactions
-   → columns z-scored → ridge regression, lambda by leave-one-out CV
-   → normalized screen (x, y)
+learned gaze model (model.py — trained by pursuit calibration)
+   ridge-physics vs MLP vs gradient boosting; best holdout error wins
    │
    ▼
 robustness (app.py): blink gate → clamp → median-of-3 → One Euro filter
@@ -84,46 +80,58 @@ robustness (app.py): blink gate → clamp → median-of-3 → One Euro filter
 cursor (mouse.py) + click gestures (clicker.py)
 ```
 
-### Why each piece exists
+### Pursuit calibration (calibration.py + pursuit.py)
 
-**Model-learned features, not geometry.** Gaze comes from MediaPipe's
-`eyeLook*` blendshapes (a network trained on humans looking around) and full
-head pose — yaw/pitch/roll plus x/y/depth position — from its facial
-transformation matrix. Earlier versions hand-computed iris offsets and
-solvePnP head pose; both were noisy enough to sink the whole pipeline.
+You **follow the actual mouse cursor** as it wanders smoothly around the
+screen — eased travel between random waypoints, brief holds, forced visits
+to edges and corners. Every frame records (face features → where the cursor
+is). Two phases:
 
-**Depth interactions make it posture-proof.** Physics: how far your gaze
-lands on screen scales with how far you sit from it (displacement ≈
-distance × tan(angle)). The model therefore has explicit `tz × gaze` and
-`tz × yaw/pitch` terms — and calibration runs at **three postures** (normal,
-leaned back, leaned in) so those terms are actually learnable. A
-single-posture calibration has zero variance in head position; no model
-form can learn position invariance from it.
+1. ~60 s sitting comfortably.
+2. ~60 s **while slowly changing posture** — lean back, lean in, shift
+   around. Position invariance is learned from continuous real data, not
+   assumed from a formula.
 
-**Gaze-arrival gating in calibration.** Capture at each dot starts only
-once your gaze has *landed* — a rolling 0.4 s window of gaze features must
-go quiet (and eyes must be open) before samples count, instead of a fixed
-timer that records your eyes mid-flight. The dot also glides between
-positions so your eyes naturally track it. The dot turns green when capture
-actually begins.
+That's ~3,500 training samples instead of the ~34 static dots of the
+previous design — enough data to train actual ML models.
 
-**Standardization + cross-validated ridge.** Design-matrix columns are
-z-scored (mixed scales otherwise crush the small signals; stats stored in
-`calibration.json`), the ridge lambda is picked by leave-one-out CV on your
-data, and columns are clipped at predict time so the interaction terms
-can't explode outside the calibrated range.
+### The model shootout (model.py)
 
-**Validation before saving.** After fitting, you look at 5 fresh dots at
-normal posture plus one leaned back, with the predicted point drawn live.
-You see mean/worst error in pixels — including the posture-change error —
-and choose to save or redo. Garbage calibrations no longer save silently.
+Every calibration trains three candidates and prints a comparison:
 
-**Robust prediction path.** While you blink the cursor holds still (blinks
-send the gaze blendshapes haywire — this was the biggest jitter source).
-Raw predictions are clamped (an off-screen fling can't wind up the filter),
+```
+pursuit lag: 100 ms (ridge holdout 62px)
+dataset: 3135 samples (627 held out)
+model comparison (holdout, lower is better):
+  hgb        58px   (fit 3.3s)
+  mlp        64px   (fit 4.0s)
+  ridge      71px   (fit 0.0s)
+winner: hgb (58px holdout), refit on all data
+```
+
+- **ridge** — regression on a physics-motivated term expansion (the old
+  closed-form approach, kept as the baseline that keeps us honest)
+- **mlp** — small neural net (2×64, standardized inputs, early stopping)
+- **hgb** — gradient-boosted trees, one per screen axis
+
+Details that matter:
+
+- **Pursuit lag is measured, not assumed.** Your eyes trail a moving target
+  by ~100 ms, so features at time *t* are paired with where the target was
+  *lag* seconds earlier. The lag (0–250 ms) is chosen by holdout error.
+- **Temporal holdout, not random.** The last 20% of each phase is held out.
+  Random splits would leak — adjacent frames are near-duplicates.
+- **Hygiene:** frames during a blink (gaze coefficients go haywire) and for
+  0.2 s afterwards are dropped before training.
+- The winner is refit on all data, then verified on **static check dots**
+  (5 at normal posture + 1 leaned back) and you see the real px errors
+  before anything is saved.
+
+### Runtime robustness (app.py)
+
+While you blink the cursor holds still. Raw predictions are clamped, then
 median-of-3 filtered (kills single-frame spikes), then One Euro smoothed
-(steady when you hold still, responsive when you flick — the same filter
-class VR controllers use).
+(steady when you hold still, responsive when you flick).
 
 ---
 
@@ -133,22 +141,24 @@ class VR controllers use).
 touchless/
 ├── touchless/
 │   ├── __main__.py     CLI (argparse) — start reading here
-│   ├── app.py          main loops for preview / calibrate / run
+│   ├── app.py          main loops: preview / calibrate / retrain / run
 │   ├── config.py       ALL tunable parameters, documented
 │   ├── tracking.py     webcam + MediaPipe → FaceSample (the core contract)
-│   ├── calibration.py  3-posture routine, depth-aware fit, validation pass
+│   ├── pursuit.py      moving-cursor trajectory + data collection
+│   ├── model.py        dataset build, lag search, model shootout, persistence
+│   ├── calibration.py  calibration UX: instructions, validation dots, accept/redo
 │   ├── smoothing.py    One Euro filter
 │   ├── mouse.py        OS cursor wrapper (pyautogui)
 │   └── clicker.py      dwell + blink click state machines
 ├── models/             auto-downloaded MediaPipe model (gitignored)
-├── calibration.json    your personal calibration (gitignored, versioned)
+├── model.pkl           your trained gaze model (gitignored, versioned)
+├── gaze_data.npz       your last pursuit session (gitignored) — feeds `retrain`
 └── requirements.txt
 ```
 
-The key interface is `FaceSample` in `tracking.py`. Everything downstream
-only knows about that dataclass — so when this becomes a Tauri app, you can
-swap the perception layer (or move it behind a socket) without touching the
-calibration/smoothing/click logic.
+The key interface is `FaceSample` in `tracking.py` plus
+`GazeModel.predict(features) -> (x, y)` in `model.py`. Everything else is
+replaceable — including the model itself, which is the point.
 
 ---
 
@@ -156,95 +166,63 @@ calibration/smoothing/click logic.
 
 ### 1. Verify tracking (`preview`)
 
-The telemetry panel shows everything being tracked, live:
+The telemetry panel shows everything being tracked, live: gaze x/y, blink
+score, yaw/pitch/roll, head x/y in cm, and **depth in cm with a bar that
+moves as you lean**. Check each signal responds before calibrating. fps
+should be ≥ 20; if not, drop `frame_width/height` in `config.py`.
 
-```
-preview - q to quit   29.1 fps
-gaze  x +0.12  y -0.05   blink 0.08 open
-head  yaw +3.2  pitch -8.1  roll +1.4      <- turn/nod/tilt your head
-pos   x +2.1cm  y -0.5cm  depth 61.0cm     <- slide/lean around
-[############      ] depth                 <- bar moves as you lean
-```
+### 2. Calibrate and read the numbers
 
-- `gaze x/y` should move when you look around **without moving your head**.
-- `yaw/pitch/roll` should track head turns/nods/tilts with believable numbers.
-- `depth` should grow when you lean back, shrink when you lean in.
-- `blink` should jump toward 1.0 when you close your eyes.
-- fps should be ≥ 20 at 720p. If not, set `frame_width/height` to 640×480
-  in `config.py`.
+During phase 2, genuinely move — lean back as far as you ever sit, lean in
+close, shift side to side. The model can only be accurate in postures it
+has seen. The console prints the lag, dataset size, and model comparison;
+the check screen shows mean/worst error at normal posture and leaned back.
+Rough guide on a 1920 screen: **< 100 px mean is good** for a webcam,
+~150 px is usable with dwell clicking.
 
-If tracking is jittery here, fix it *here* first (lighting, camera position)
-— no amount of downstream tuning saves bad input. Face the light source;
-avoid strong backlight.
+### 3. Iterate on the model without recollecting
 
-### 2. Calibrate and read the validation numbers
-
-The check screen reports mean/worst error at normal posture **and** the
-leaned-back error separately. Rough guide on a 1920-wide screen: **< 100 px
-mean is good** for webcam tracking, ~150 px is usable with dwell clicking,
-worse → hit `r` and redo (check lighting first). During the lean-back and
-lean-in stages, genuinely change your posture and hold it — that variance
-is what makes the mapping survive you moving later. Thanks to the 3-posture
-protocol you should NOT need to recalibrate just because you shifted; redo
-it when lighting changes drastically or accuracy visibly degrades.
-
-### 3. End-to-end drill
-
-Open Paint fullscreen, `run --click off`, try to park the cursor on each
-corner and the center. Tight cluster = good. Then turn on dwell and try
-actually using the machine.
-
-### 4. Offline iteration (no face required)
+`gaze_data.npz` holds your raw session. Edit `model.py` (add a candidate,
+change hyperparameters, widen the lag grid) and run:
 
 ```powershell
-.\.venv\Scripts\python.exe -m touchless run --log session.csv
+.\.venv\Scripts\python.exe -m touchless retrain
 ```
 
-records `[t, features..., blink, raw_x/y, smooth_x/y]` per frame. Replay it
-in a notebook to evaluate smoothing/mapping changes against recorded
-sessions instead of your live face.
+Instant experiment loop against your own recorded face — no camera, no
+recalibration. This is the main iteration surface now.
 
 ### Tuning loop
-
-All knobs live in `touchless/config.py` with comments. The ones you'll
-actually touch:
 
 | Symptom | Knob | Direction |
 |---|---|---|
 | Cursor jitters when holding still | `smooth_min_cutoff` | lower (e.g. 0.3) |
 | Cursor lags behind fast glances | `smooth_beta` | higher (e.g. 1.0) |
-| Cursor freezes too often (squinting reads as blink) | `blink_gate` | raise (watch `blink` in preview) |
-| Calibration dots take forever to turn green | `calib_stability_std` | raise (e.g. 0.03) |
-| Dots turn green before your eyes arrive | `calib_stability_std` | lower |
+| Cursor freezes too often (squint reads as blink) | `blink_gate` | raise |
+| Dot moves too fast to track comfortably | `pursuit_speed` | lower the max |
+| Model overfits phase 1 posture | move MORE during phase 2 | — |
 | Dwell clicks fire accidentally | `dwell_time_s` / `dwell_radius_px` | raise / lower |
 | Blink-clicks not detected | `blink_closed_threshold` | lower |
-| Validation error high everywhere | recalibrate; check lighting | — |
-| Accuracy dies when leaning | redo calibration with *bigger* posture differences between stages | — |
 
 ### Known limitations (MVP)
 
-- Physics still caps webcam gaze at region-level precision; the head-pose
-  component is what gives you fine control. The planned next lever is
-  **pursuit calibration** (follow a moving dot → hundreds of training
-  samples instead of 16) if the current accuracy isn't enough.
-- Single monitor assumed (uses primary screen size).
-- Windows-focused (tested there); macOS needs accessibility permissions for
-  pyautogui, Linux needs X11.
+- Physics still caps webcam gaze at region-level precision — the learned
+  model squeezes out what the signal contains, it cannot add signal. Head
+  movement gives the fine control; eyes give fast coarse targeting.
+- Sessions overwrite `gaze_data.npz`; appending multiple sessions for a
+  bigger training set is an easy future upgrade.
+- Single monitor assumed; Windows-tested.
 
 ---
 
 ## Roadmap → Tauri
 
 1. **Finalize pipeline here** — accuracy, click UX, smoothing constants.
-   This is the hard, iterate-heavy part. *(you are here)*
+   *(you are here)*
 2. **Split engine from UI** — run the tracker as a headless process emitting
-   `(x, y, click)` over a local WebSocket; a first "remote control" client
-   proves the interface.
-3. **Tauri app** — frontend = settings/calibration UI; engine = either
-   - the Python tracker compiled with PyInstaller, bundled as a
-     [Tauri sidecar](https://tauri.app/develop/sidecar/) (fast path), or
-   - a Rust rewrite using ONNX Runtime + `enigo` for cursor control
-     (clean path, more work).
-
-Because of step 2's interface, both engine options slot in without changing
-the app.
+   `(x, y, click)` over a local WebSocket.
+3. **Tauri app** — frontend = settings/calibration UI; engine = PyInstaller
+   sidecar (fast path) or Rust rewrite with ONNX Runtime (clean path).
+   Note: the trained model is a pickled sklearn object; the Rust path would
+   export it (or retrain a numpy-portable model) — one more reason the
+   engine/UI split comes first.
