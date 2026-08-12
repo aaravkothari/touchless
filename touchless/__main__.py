@@ -1,0 +1,39 @@
+"""CLI entry point: python -m touchless <command>."""
+
+import argparse
+
+from . import app
+from .config import Config
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="touchless",
+        description="Control the mouse cursor with your eyes/head via webcam.",
+    )
+    parser.add_argument("--camera", type=int, default=0, help="webcam index (default 0)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("preview", help="visualize tracking, no cursor control")
+
+    p_cal = sub.add_parser("calibrate", help="run the fullscreen calibration sequence")
+    p_cal.add_argument("--mode", choices=["gaze", "head"], default="gaze",
+                       help="gaze = eyes+head, head = head pose only (default gaze)")
+
+    p_run = sub.add_parser("run", help="drive the cursor (calibrate first)")
+    p_run.add_argument("--click", choices=["off", "dwell", "blink"], default="off",
+                       help="click method (default off)")
+
+    args = parser.parse_args()
+    cfg = Config(camera_index=args.camera)
+
+    if args.command == "preview":
+        app.preview(cfg)
+    elif args.command == "calibrate":
+        app.calibrate(cfg, args.mode)
+    elif args.command == "run":
+        app.run(cfg, args.click)
+
+
+if __name__ == "__main__":
+    main()
