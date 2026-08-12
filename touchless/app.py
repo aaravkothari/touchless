@@ -16,8 +16,9 @@ import numpy as np
 import pyautogui
 
 from .calibration import run_calibration
-from .clicker import BlinkClicker, DwellClicker
+from .clicker import BlinkClicker, DwellClicker, PinchClicker
 from .config import Config
+from .hands import HandTracker
 from .model import GazeModel
 from .mouse import Cursor
 from .pursuit import PursuitData
@@ -46,27 +47,25 @@ def _telemetry(s, cfg, fps, status):
     return lines
 
 
-def _draw_hud(frame, sample, lines, pred=None, scale=1.0):
+def _draw_hud(frame, lines, pred=None, scale=1.0, points=(), depth=None):
     """Mirror + optionally downscale the frame, overlay tracking info.
 
+    points: landmark pixel coords (in frame space) to dot in green.
     pred: normalized (x, y) prediction, drawn in a mini screen-rect (top
-    right) so you can see where the cursor would go. A depth bar is drawn
-    under the text when a face is tracked.
+    right) so you can see where the cursor would go.
+    depth: if given, a lean-in/lean-out bar is drawn under the text.
     """
     view = cv2.flip(frame, 1)
     if scale != 1.0:
         view = cv2.resize(view, (int(view.shape[1] * scale), int(view.shape[0] * scale)))
     h, w = view.shape[:2]
-    if sample.ok and sample.landmarks is not None:
-        for i in _HUD_LANDMARKS:
-            x, y = sample.landmarks[i]
-            cv2.circle(view, (w - 1 - int(x * scale), int(y * scale)), 2, (0, 220, 0), -1)
+    for x, y in points:
+        cv2.circle(view, (w - 1 - int(x * scale), int(y * scale)), 2, (0, 220, 0), -1)
     for n, line in enumerate(lines):
         cv2.putText(view, line, (10, 24 + n * 24), _HUD, 0.55, (0, 220, 220), 1)
-    if sample.ok:
-        # Depth bar: watch yourself lean in/out.
+    if depth is not None:
         y0 = 24 + len(lines) * 24
-        frac = float(np.clip((sample.depth - _DEPTH_LO) / (_DEPTH_HI - _DEPTH_LO), 0, 1))
+        frac = float(np.clip((depth - _DEPTH_LO) / (_DEPTH_HI - _DEPTH_LO), 0, 1))
         cv2.rectangle(view, (10, y0), (10 + 150, y0 + 10), (80, 80, 80), 1)
         cv2.rectangle(view, (10, y0), (10 + int(150 * frac), y0 + 10), (0, 220, 220), -1)
         cv2.putText(view, "depth", (168, y0 + 10), _HUD, 0.45, (150, 150, 150), 1)
@@ -78,6 +77,31 @@ def _draw_hud(frame, sample, lines, pred=None, scale=1.0):
         py = 10 + int(np.clip(pred[1], 0, 1) * rh)
         cv2.drawMarker(view, (px, py), (255, 0, 255), cv2.MARKER_CROSS, 12, 2)
     return view
+
+
+def _face_hud_extras(s):
+    """(points, depth) for _draw_hud from a FaceSample."""
+    if not s.ok or s.landmarks is None:
+        return (), None
+    return s.landmarks[list(_HUD_LANDMARKS)], s.depth
+
+
+def _hand_telemetry(s, fps, status):
+    lines = [f"{status}   {fps:4.1f} fps"]
+    if s.pointer_ok:
+        lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, {s.pointer[1]:.2f})   "
+                     f"pinch {s.pinch:.2f}")
+    else:
+        lines.append("RIGHT hand: NOT FOUND (point with your right index finger)")
+    if s.left_ok:
+        lines.append("LEFT  " + ("FIST (recenter!)" if s.left_fist else "open"))
+    else:
+        lines.append("LEFT  hand: not in view")
+    return lines
+
+
+def _hand_points(s):
+    return [tuple(p) for _, lm in s.hands for p in lm]
 
 
 def _load_model(cfg: Config) -> GazeModel | None:
@@ -101,8 +125,11 @@ class _Fps:
         return (len(self.t) - 1) / (self.t[-1] - self.t[0])
 
 
-def preview(cfg: Config):
+def preview(cfg: Config, input_mode: str = "gaze"):
     """Show tracking output. Use this to verify lighting/camera before calibrating."""
+    if input_mode == "hand":
+        _preview_hand(cfg)
+        return
     model = _load_model(cfg)  # optional: shows live prediction if calibrated
     tracker = FaceTracker(cfg)
     fps = _Fps()
@@ -115,7 +142,27 @@ def preview(cfg: Config):
             pred = model.predict(s.features) if (model is not None and s.ok) else None
             if pred is not None:
                 lines.append(f"pred  ({pred[0]:+.2f}, {pred[1]:+.2f})")
-            cv2.imshow("touchless preview", _draw_hud(frame, s, lines, pred))
+            points, depth = _face_hud_extras(s)
+            cv2.imshow("touchless preview",
+                       _draw_hud(frame, lines, pred, points=points, depth=depth))
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        tracker.close()
+        cv2.destroyAllWindows()
+
+
+def _preview_hand(cfg: Config):
+    tracker = HandTracker(cfg)
+    fps = _Fps()
+    try:
+        while True:
+            frame, s = tracker.read()
+            if frame is None:
+                continue
+            lines = _hand_telemetry(s, fps.tick(), "hand preview - q to quit")
+            cv2.imshow("touchless preview",
+                       _draw_hud(frame, lines, points=_hand_points(s)))
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
@@ -145,7 +192,19 @@ def retrain(cfg: Config):
     print(f"Model ({model.name}) saved to {cfg.model_file}")
 
 
-def run(cfg: Config, click_mode: str, log_path: str | None = None):
+def run(cfg: Config, click_mode: str, log_path: str | None = None,
+        input_mode: str = "gaze"):
+    if input_mode == "hand":
+        if click_mode == "blink":
+            print("--click blink needs face tracking; hand mode supports "
+                  "--click off | dwell | pinch")
+            return
+        _run_hand(cfg, click_mode)
+        return
+    if click_mode == "pinch":
+        print("--click pinch needs hand tracking; gaze mode supports "
+              "--click off | dwell | blink")
+        return
     model = _load_model(cfg)
     if model is None:
         print(f"No usable {cfg.model_file} - run calibration first:")
@@ -210,7 +269,9 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
             lines = _telemetry(s, cfg, fps.tick(), status)
             if s.ok and dwell is not None and dwell.progress() > 0:
                 lines.append("dwell " + "#" * int(dwell.progress() * 10))
-            cv2.imshow("touchless", _draw_hud(frame, s, lines, pred, scale=0.5))
+            points, depth = _face_hud_extras(s)
+            cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
+                                              points=points, depth=depth))
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -225,5 +286,90 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
         if log_fh is not None:
             log_fh.close()
             print(f"Session log written to {log_path}")
+        tracker.close()
+        cv2.destroyAllWindows()
+
+
+def _run_hand(cfg: Config, click_mode: str):
+    """Hand mode: cursor = center + gain * (right index tip - anchor).
+
+    x is flipped so moving your hand right moves the cursor right on an
+    unmirrored frame. A left-hand fist re-anchors: the cursor snaps to the
+    screen center and your current finger position becomes the new neutral.
+    """
+    print(f"Hand mode, click={click_mode}.")
+    print("Point with your RIGHT index finger. LEFT fist recenters the cursor.")
+    print("Controls: q quits, space pauses (preview window must be focused).")
+    print("Emergency stop: slam the mouse into the top-left corner.")
+
+    tracker = HandTracker(cfg)
+    cursor = Cursor(cfg.screen_inset_px)
+    smoother = OneEuro2D(cfg.smooth_min_cutoff, cfg.smooth_beta)
+    dwell = DwellClicker(cfg) if click_mode == "dwell" else None
+    pinch = PinchClicker(cfg) if click_mode == "pinch" else None
+    fps = _Fps()
+    anchor: np.ndarray | None = None
+    fist_since: float | None = None
+    last_recenter = 0.0
+    paused = False
+
+    try:
+        while True:
+            frame, s = tracker.read()
+            if frame is None:
+                continue
+            now = time.monotonic()
+
+            status = "PAUSED (space to resume)" if paused else "LIVE - q quit, space pause"
+            pred = None
+            if not paused and s.pointer_ok:
+                if anchor is None:
+                    anchor = s.pointer.copy()  # first sighting = neutral
+
+                # Left fist (held briefly) -> recenter and re-anchor.
+                if s.left_ok and s.left_fist:
+                    if fist_since is None:
+                        fist_since = now
+                    if (now - fist_since >= cfg.fist_hold_s
+                            and now - last_recenter >= cfg.fist_cooldown_s):
+                        anchor = s.pointer.copy()
+                        smoother.reset()
+                        cursor.move_norm(0.5, 0.5)
+                        last_recenter = now
+                else:
+                    fist_since = None
+
+                d = s.pointer - anchor
+                nx = 0.5 - cfg.hand_gain * float(d[0])  # x flipped: mirror-natural
+                ny = 0.5 + cfg.hand_gain * float(d[1])
+                nx = float(np.clip(nx, -cfg.pred_clamp, 1 + cfg.pred_clamp))
+                ny = float(np.clip(ny, -cfg.pred_clamp, 1 + cfg.pred_clamp))
+                sx, sy = smoother.apply(nx, ny, now)
+                cursor.move_norm(sx, sy)
+                pred = (sx, sy)
+                if dwell is not None:
+                    px, py = cursor.position()
+                    if dwell.update(px, py):
+                        cursor.click()
+                if pinch is not None and pinch.update(s.pinch):
+                    cursor.click()
+            else:
+                fist_since = None  # pointer lost: hold position, reset gesture
+
+            lines = _hand_telemetry(s, fps.tick(), status)
+            if s.pointer_ok and dwell is not None and dwell.progress() > 0:
+                lines.append("dwell " + "#" * int(dwell.progress() * 10))
+            cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
+                                              points=_hand_points(s)))
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            if key == ord(" "):
+                paused = not paused
+                smoother.reset()
+    except pyautogui.FailSafeException:
+        print("Fail-safe triggered (mouse in top-left corner). Stopped.")
+    finally:
         tracker.close()
         cv2.destroyAllWindows()

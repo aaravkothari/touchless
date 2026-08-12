@@ -14,7 +14,9 @@ def main():
     parser.add_argument("--camera", type=int, default=0, help="webcam index (default 0)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("preview", help="visualize tracking, no cursor control")
+    p_prev = sub.add_parser("preview", help="visualize tracking, no cursor control")
+    p_prev.add_argument("--input", choices=["gaze", "hand"], default="gaze",
+                        help="what to track (default gaze)")
 
     sub.add_parser("calibrate",
                    help="pursuit calibration (follow the moving cursor) + validation")
@@ -22,23 +24,27 @@ def main():
     sub.add_parser("retrain",
                    help="refit the model from the recorded pursuit session (no camera)")
 
-    p_run = sub.add_parser("run", help="drive the cursor (calibrate first)")
-    p_run.add_argument("--click", choices=["off", "dwell", "blink"], default="off",
-                       help="click method (default off)")
+    p_run = sub.add_parser("run", help="drive the cursor")
+    p_run.add_argument("--input", choices=["gaze", "hand"], default="gaze",
+                       help="gaze = eyes+head (calibrate first); "
+                            "hand = right index finger, no calibration needed")
+    p_run.add_argument("--click", choices=["off", "dwell", "blink", "pinch"],
+                       default="off",
+                       help="click method (default off; pinch is hand-mode only)")
     p_run.add_argument("--log", metavar="FILE.csv", default=None,
-                       help="record features + predictions to a CSV for offline analysis")
+                       help="record features + predictions to a CSV (gaze mode)")
 
     args = parser.parse_args()
     cfg = Config(camera_index=args.camera)
 
     if args.command == "preview":
-        app.preview(cfg)
+        app.preview(cfg, args.input)
     elif args.command == "calibrate":
         app.calibrate(cfg)
     elif args.command == "retrain":
         app.retrain(cfg)
     elif args.command == "run":
-        app.run(cfg, args.click, args.log)
+        app.run(cfg, args.click, args.log, args.input)
 
 
 if __name__ == "__main__":

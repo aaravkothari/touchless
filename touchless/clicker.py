@@ -41,6 +41,29 @@ class DwellClicker:
         return min((time.monotonic() - self.anchor_t) / self.cfg.dwell_time_s, 1.0)
 
 
+class PinchClicker:
+    """Click when thumb and index tip pinch together (hand mode).
+
+    Fires once per pinch: requires release above the threshold before the
+    next click, plus a cooldown.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.was_pinched = False
+        self.last_click_t = 0.0
+
+    def update(self, pinch: float) -> bool:
+        now = time.monotonic()
+        pinched = pinch < self.cfg.pinch_click_threshold
+        fire = (pinched and not self.was_pinched
+                and now - self.last_click_t >= self.cfg.pinch_cooldown_s)
+        self.was_pinched = pinched
+        if fire:
+            self.last_click_t = now
+        return fire
+
+
 class BlinkClicker:
     """Click on a deliberate blink: eyes closed for blink_min_s..blink_max_s.
 
