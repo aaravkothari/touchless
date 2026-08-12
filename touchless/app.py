@@ -340,10 +340,11 @@ def _run_hand(cfg: Config):
 
     stack = _HandStack(cfg)
     cursor = Cursor(cfg.screen_inset_px)
-    smoother = OneEuro2D(cfg.smooth_min_cutoff, cfg.smooth_beta)
+    smoother = OneEuro2D(cfg.hand_smooth_min_cutoff, cfg.hand_smooth_beta)
     left_pinch = PinchHold(cfg)
     right_pinch = PinchHold(cfg)
     fps = _Fps()
+    raw_hist: deque[tuple[float, float]] = deque(maxlen=3)  # spike pre-filter
     anchor: np.ndarray | None = None
     tongue_since: float | None = None
     last_recenter = 0.0
@@ -382,6 +383,7 @@ def _run_hand(cfg: Config):
                             and now - last_recenter >= cfg.tongue_cooldown_s):
                         anchor = s.pointer.copy()
                         smoother.reset()
+                        raw_hist.clear()
                         cursor.move_norm(0.5, 0.5)
                         last_recenter = now
                 else:
@@ -392,7 +394,10 @@ def _run_hand(cfg: Config):
                 ny = 0.5 + cfg.hand_gain * float(d[1])
                 nx = float(np.clip(nx, -cfg.pred_clamp, 1 + cfg.pred_clamp))
                 ny = float(np.clip(ny, -cfg.pred_clamp, 1 + cfg.pred_clamp))
-                sx, sy = smoother.apply(nx, ny, now)
+                raw_hist.append((nx, ny))
+                mx = float(np.median([p[0] for p in raw_hist]))
+                my = float(np.median([p[1] for p in raw_hist]))
+                sx, sy = smoother.apply(mx, my, now)
                 cursor.move_norm(sx, sy)
                 pred = (sx, sy)
             else:
@@ -427,6 +432,7 @@ def _run_hand(cfg: Config):
                 paused = not paused
                 release()
                 smoother.reset()
+                raw_hist.clear()
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:
