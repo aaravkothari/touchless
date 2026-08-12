@@ -163,7 +163,10 @@ class _HandStack:
     Nth frame (tongue detection doesn't need full rate)."""
 
     def __init__(self, cfg: Config):
-        self.camera = Camera(cfg)
+        from dataclasses import replace
+        cam_cfg = replace(cfg, frame_width=cfg.hand_frame_width,
+                          frame_height=cfg.hand_frame_height)
+        self.camera = Camera(cam_cfg)
         self.hand = HandTracker(cfg, self.camera)
         self.face = FaceTracker(cfg, self.camera)
         self.every_n = max(cfg.face_every_n, 1)

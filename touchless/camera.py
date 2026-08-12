@@ -11,8 +11,13 @@ class Camera:
     def __init__(self, cfg: Config):
         backend = cv2.CAP_DSHOW if hasattr(cv2, "CAP_DSHOW") else cv2.CAP_ANY
         self.cap = cv2.VideoCapture(cfg.camera_index, backend)
+        # MJPG unlocks higher capture rates on most webcams (the default
+        # uncompressed format is USB-bandwidth-limited); 60 fps is a request,
+        # harmless where unsupported.
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.frame_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.frame_height)
+        self.cap.set(cv2.CAP_PROP_FPS, 60)
         if not self.cap.isOpened():
             raise RuntimeError(
                 f"Could not open camera {cfg.camera_index}. "

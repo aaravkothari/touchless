@@ -55,7 +55,12 @@ class Config:
     # tremor, so smoothing at rest is much heavier than in gaze mode while
     # beta keeps fast sweeps responsive.
     hand_smooth_min_cutoff: float = 0.25
-    hand_smooth_beta: float = 0.6
+    hand_smooth_beta: float = 1.5  # high = fast sweeps cut through the filter
+    # Hand mode runs its own lower camera resolution: fingertips don't need
+    # 720p (that was for iris pixels) and the smaller frames roughly double
+    # the frame rate of the dual-model stack.
+    hand_frame_width: int = 640
+    hand_frame_height: int = 480
     hand_labels_flipped: bool = False  # flip if preview labels your hands wrong
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
@@ -64,7 +69,8 @@ class Config:
     tongue_threshold: float = 0.45  # tongue-pixel fraction above this = tongue out
     tongue_hold_s: float = 0.2     # tongue must hold this long to recenter
     tongue_cooldown_s: float = 1.0
-    face_every_n: int = 2          # run the face model every Nth frame in hand mode
+    face_every_n: int = 3          # run the face model every Nth frame in hand mode
+                                   # (tongue detection doesn't need full rate)
 
     # --- Dwell click ---
     dwell_radius_px: int = 45      # cursor must stay inside this circle
