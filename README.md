@@ -57,32 +57,40 @@ On first run a ~3.7 MB MediaPipe model is downloaded automatically into `models/
 - **`dwell`** — hold the cursor still (within 45 px) for 1 s → left click. Works in both input modes.
 - **`blink`** — deliberately close both eyes for 0.25–1.5 s → left click (gaze mode only).
   Reflex blinks (~0.1 s) are ignored.
-- **`pinch`** — touch your right thumb and index fingertips together → left click (hand mode only).
+- Hand mode ignores `--click`: its control scheme is fixed (left-hand pinches
+  click and drag, tongue recenters — see the Hand mode section).
 
 ### Hand mode
 
 ```powershell
-.\.venv\Scripts\python.exe -m touchless preview --input hand   # check hand detection first
-.\.venv\Scripts\python.exe -m touchless run --input hand --click pinch
+.\.venv\Scripts\python.exe -m touchless preview --input hand   # check detection first
+.\.venv\Scripts\python.exe -m touchless run --input hand
 ```
 
-An "air trackpad": the cursor follows your **right index fingertip** —
-`cursor = screen center + gain × (fingertip − anchor)` — so it's absolute
-(no drift), needs no training, and works immediately.
+An "air trackpad" with a fixed control scheme — **right hand moves, left
+hand + face control** (`--click` is ignored in this mode):
 
-- **Move**: point with your right index finger; small hand movements map to
-  large cursor movements (`hand_gain` in config).
-- **Recenter**: make a **fist with your left hand** (hold ~0.15 s). The
-  cursor snaps to the screen center *and* your current finger position
-  becomes the new neutral point — so you can reposition your arm anywhere
-  comfortable and keep going.
-- **Click**: `pinch` (thumb + index) or `dwell`.
-- If the pointer is lost the cursor holds still.
+| Gesture | Action |
+|---|---|
+| Point with **right index finger** | Move the cursor (`cursor = center + gain × (finger − anchor)`; absolute, no drift, no training) |
+| **Left hand**: pinch thumb + index | **Left click** — hold the pinch to hold the button (drag!) |
+| **Left hand**: pinch thumb + middle | **Right click** — hold works the same |
+| **Tongue out** (~0.2 s) | Recenter: cursor snaps to screen center and your current finger position becomes the new neutral |
+| Hand leaves the frame | Cursor holds still; any held button releases |
 
-One gotcha handled for you: MediaPipe labels hands assuming a mirrored
-image, and webcam frames aren't — so labels are swapped internally
-(`hand_labels_flipped` in config). If `preview --input hand` says RIGHT
-when you raise your *left* hand, flip that setting.
+Notes:
+
+- Tongue detection is a custom heuristic (MediaPipe's blendshapes have no
+  `tongueOut`): with your jaw open, the app checks whether the inner-mouth
+  region is filled with bright tongue-colored pixels instead of a dark
+  cavity. Watch the `FACE jaw/tongue` numbers in preview — tongue should
+  jump above ~0.45 when you stick it out. Lighting-sensitive; tune
+  `tongue_threshold` if needed.
+- Pinch-hold uses hysteresis (engage < 0.35, release > 0.45 of hand size)
+  so drags don't flutter.
+- Hand mode runs the face model too (for the tongue), at half frame rate
+  (`face_every_n`) — expect ~20 fps overall.
+- If preview labels your hands wrong, flip `hand_labels_flipped` in config.
 
 ---
 
@@ -235,7 +243,10 @@ recalibration. This is the main iteration surface now.
 | Blink-clicks not detected | `blink_closed_threshold` | lower |
 | Hand cursor too twitchy / too sluggish | `hand_gain` | lower / raise |
 | Wrong hand labeled RIGHT in hand preview | `hand_labels_flipped` | flip |
-| Pinch clicks fire while pointing | `pinch_click_threshold` | lower |
+| Pinch clicks fire accidentally | `pinch_click_threshold` | lower |
+| Drags drop mid-hold | `pinch_release_threshold` | raise |
+| Tongue recenter won't trigger | `tongue_threshold` | lower (watch `tongue` in preview) |
+| Talking triggers recenter | `tongue_threshold` / `tongue_hold_s` | raise |
 
 ### Known limitations (MVP)
 
