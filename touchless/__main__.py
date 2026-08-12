@@ -16,7 +16,7 @@ def main():
 
     sub.add_parser("preview", help="visualize tracking, no cursor control")
 
-    sub.add_parser("calibrate", help="fullscreen 16-dot calibration + validation")
+    sub.add_parser("calibrate", help="3-posture calibration + accuracy validation")
 
     p_run = sub.add_parser("run", help="drive the cursor (calibrate first)")
     p_run.add_argument("--click", choices=["off", "dwell", "blink"], default="off",
