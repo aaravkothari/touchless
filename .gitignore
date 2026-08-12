@@ -7,6 +7,8 @@ venv/
 
 # Per-machine user data
 calibration.json
+model.pkl
+gaze_data.npz
 
 # Downloaded ML models
 models/

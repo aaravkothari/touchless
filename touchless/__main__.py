@@ -16,7 +16,11 @@ def main():
 
     sub.add_parser("preview", help="visualize tracking, no cursor control")
 
-    sub.add_parser("calibrate", help="3-posture calibration + accuracy validation")
+    sub.add_parser("calibrate",
+                   help="pursuit calibration (follow the moving cursor) + validation")
+
+    sub.add_parser("retrain",
+                   help="refit the model from the recorded pursuit session (no camera)")
 
     p_run = sub.add_parser("run", help="drive the cursor (calibrate first)")
     p_run.add_argument("--click", choices=["off", "dwell", "blink"], default="off",
@@ -31,6 +35,8 @@ def main():
         app.preview(cfg)
     elif args.command == "calibrate":
         app.calibrate(cfg)
+    elif args.command == "retrain":
+        app.retrain(cfg)
     elif args.command == "run":
         app.run(cfg, args.click, args.log)
 

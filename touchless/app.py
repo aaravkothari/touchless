@@ -15,10 +15,12 @@ import cv2
 import numpy as np
 import pyautogui
 
-from .calibration import CalibrationMap, run_calibration
+from .calibration import run_calibration
 from .clicker import BlinkClicker, DwellClicker
 from .config import Config
+from .model import GazeModel
 from .mouse import Cursor
+from .pursuit import PursuitData
 from .smoothing import OneEuro2D
 from .tracking import FaceTracker
 
@@ -78,11 +80,11 @@ def _draw_hud(frame, sample, lines, pred=None, scale=1.0):
     return view
 
 
-def _load_map(cfg: Config) -> CalibrationMap | None:
-    if not os.path.exists(cfg.calib_file):
+def _load_model(cfg: Config) -> GazeModel | None:
+    if not os.path.exists(cfg.model_file):
         return None
     try:
-        return CalibrationMap.load(cfg.calib_file)
+        return GazeModel.load(cfg.model_file)
     except ValueError as e:
         print(e)
         return None
@@ -101,7 +103,7 @@ class _Fps:
 
 def preview(cfg: Config):
     """Show tracking output. Use this to verify lighting/camera before calibrating."""
-    cmap = _load_map(cfg)  # optional: shows live prediction if calibrated
+    model = _load_model(cfg)  # optional: shows live prediction if calibrated
     tracker = FaceTracker(cfg)
     fps = _Fps()
     try:
@@ -110,7 +112,7 @@ def preview(cfg: Config):
             if frame is None:
                 continue
             lines = _telemetry(s, cfg, fps.tick(), "preview - q to quit")
-            pred = cmap.predict(s.features) if (cmap is not None and s.ok) else None
+            pred = model.predict(s.features) if (model is not None and s.ok) else None
             if pred is not None:
                 lines.append(f"pred  ({pred[0]:+.2f}, {pred[1]:+.2f})")
             cv2.imshow("touchless preview", _draw_hud(frame, s, lines, pred))
@@ -123,18 +125,30 @@ def preview(cfg: Config):
 
 def calibrate(cfg: Config):
     screen_w, screen_h = pyautogui.size()
-    cmap = run_calibration(cfg, screen_w, screen_h)
-    if cmap is None:
+    model = run_calibration(cfg, screen_w, screen_h)
+    if model is None:
         print("Calibration aborted, nothing saved.")
         return
-    cmap.save(cfg.calib_file)
-    print(f"Calibration saved to {cfg.calib_file}")
+    model.save(cfg.model_file)
+    print(f"Model ({model.name}) saved to {cfg.model_file}")
+
+
+def retrain(cfg: Config):
+    """Refit the model from the recorded pursuit session - no camera needed."""
+    if not os.path.exists(cfg.data_file):
+        print(f"No {cfg.data_file} found - run a calibration first to record one.")
+        return
+    data = PursuitData.load(cfg.data_file)
+    screen_w, screen_h = pyautogui.size()
+    model = GazeModel.fit(data, cfg, screen_w, screen_h)
+    model.save(cfg.model_file)
+    print(f"Model ({model.name}) saved to {cfg.model_file}")
 
 
 def run(cfg: Config, click_mode: str, log_path: str | None = None):
-    cmap = _load_map(cfg)
-    if cmap is None:
-        print(f"No usable {cfg.calib_file} - run calibration first:")
+    model = _load_model(cfg)
+    if model is None:
+        print(f"No usable {cfg.model_file} - run calibration first:")
         print("  python -m touchless calibrate")
         return
     print(f"Running, click={click_mode}.")
@@ -170,7 +184,7 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None):
             if s.ok and not paused and not blinking:
                 # Blink gating: while eyes are closed the gaze blendshapes go
                 # wild, so the cursor holds position instead of jumping.
-                nx, ny = cmap.predict(s.features)
+                nx, ny = model.predict(s.features)
                 # Clamp before smoothing so an off-screen fling can't wind up
                 # the filter, then median-of-3 to kill single-frame spikes.
                 nx = float(np.clip(nx, -cfg.pred_clamp, 1 + cfg.pred_clamp))
