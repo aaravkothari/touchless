@@ -16,13 +16,13 @@ def main():
 
     sub.add_parser("preview", help="visualize tracking, no cursor control")
 
-    p_cal = sub.add_parser("calibrate", help="run the fullscreen calibration sequence")
-    p_cal.add_argument("--mode", choices=["gaze", "head"], default="gaze",
-                       help="gaze = eyes+head, head = head pose only (default gaze)")
+    sub.add_parser("calibrate", help="fullscreen 16-dot calibration + validation")
 
     p_run = sub.add_parser("run", help="drive the cursor (calibrate first)")
     p_run.add_argument("--click", choices=["off", "dwell", "blink"], default="off",
                        help="click method (default off)")
+    p_run.add_argument("--log", metavar="FILE.csv", default=None,
+                       help="record features + predictions to a CSV for offline analysis")
 
     args = parser.parse_args()
     cfg = Config(camera_index=args.camera)
@@ -30,9 +30,9 @@ def main():
     if args.command == "preview":
         app.preview(cfg)
     elif args.command == "calibrate":
-        app.calibrate(cfg, args.mode)
+        app.calibrate(cfg)
     elif args.command == "run":
-        app.run(cfg, args.click)
+        app.run(cfg, args.click, args.log)
 
 
 if __name__ == "__main__":
