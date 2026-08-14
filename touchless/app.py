@@ -110,8 +110,11 @@ def _hand_telemetry(s, face, fps, status, held=None, wrist=False):
     return lines
 
 
-def _hand_points(s):
-    return [tuple(p) for _, lm in s.hands for p in lm]
+def _hand_points(s, show_ref=False):
+    pts = [tuple(p) for _, lm in s.hands for p in lm]
+    if show_ref and s.ref_px is not None:
+        pts.append(tuple(s.ref_px))  # virtual forearm reference dot
+    return pts
 
 
 def _load_model(cfg: Config) -> GazeModel | None:
@@ -205,7 +208,7 @@ def _preview_hand(cfg: Config, wrist: bool = False):
             lines = _hand_telemetry(s, face, fps.tick(), f"{label} - q to quit",
                                     wrist=wrist)
             cv2.imshow("touchless preview",
-                       _draw_hud(frame, lines, points=_hand_points(s)))
+                       _draw_hud(frame, lines, points=_hand_points(s, show_ref=wrist)))
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
@@ -458,7 +461,7 @@ def _run_hand(cfg: Config, wrist: bool = False):
 
             lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist)
             cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
-                                              points=_hand_points(s)))
+                                              points=_hand_points(s, show_ref=wrist)))
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
