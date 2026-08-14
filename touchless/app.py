@@ -87,14 +87,16 @@ def _face_hud_extras(s):
     return s.landmarks[list(_HUD_LANDMARKS)], s.depth
 
 
-def _hand_telemetry(s, face, fps, status, held=None, wrist=False):
+def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still=False):
     lines = [f"{status}   {fps:4.1f} fps"]
     if s.pointer_ok:
+        tag = "  [STILL]" if still else ""
         if wrist:
             lines.append(f"RIGHT tip-wrist ({s.pointer_rel[0]:+.2f}, "
-                         f"{s.pointer_rel[1]:+.2f})  <- moves (wrist-relative)")
+                         f"{s.pointer_rel[1]:+.2f})  <- moves (wrist-relative){tag}")
         else:
-            lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, {s.pointer[1]:.2f})  <- moves")
+            lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, "
+                         f"{s.pointer[1]:.2f})  <- moves{tag}")
     else:
         lines.append("RIGHT hand: NOT FOUND (point with your right index finger)")
     if s.left_ok:
@@ -494,7 +496,7 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 elif ev_r == "up" and held == "right":
                     release()
 
-            lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist)
+            lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist, still)
             cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
                                               points=_hand_points(s, show_ref=wrist)))
 
