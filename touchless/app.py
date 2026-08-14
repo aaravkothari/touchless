@@ -359,7 +359,15 @@ def _run_hand(cfg: Config, wrist: bool = False):
     cursor = Cursor(cfg.screen_inset_px)
     gain_x = cfg.hand_wrist_gain_x if wrist else cfg.hand_gain_x
     gain_y = cfg.hand_wrist_gain_y if wrist else cfg.hand_gain_y
-    smoother = OneEuro2D(cfg.hand_smooth_min_cutoff, cfg.hand_smooth_beta)
+    if wrist:
+        smoother = OneEuro2D(cfg.hand_wrist_smooth_min_cutoff,
+                             cfg.hand_wrist_smooth_beta)
+    else:
+        smoother = OneEuro2D(cfg.hand_smooth_min_cutoff, cfg.hand_smooth_beta)
+    screen_w, screen_h = pyautogui.size()
+    dead_x = cfg.hand_deadzone_px / screen_w
+    dead_y = cfg.hand_deadzone_px / screen_h
+    sent: tuple[float, float] | None = None  # last position actually forwarded
     left_pinch = PinchHold(cfg)
     right_pinch = PinchHold(cfg)
     fps = _Fps()
@@ -405,6 +413,7 @@ def _run_hand(cfg: Config, wrist: bool = False):
                         smoother.reset()
                         raw_hist.clear()
                         cursor.move_norm(0.5, 0.5)
+                        sent = (0.5, 0.5)
                         last_recenter = now
                 else:
                     tongue_since = None
@@ -418,7 +427,13 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 mx = float(np.median([p[0] for p in raw_hist]))
                 my = float(np.median([p[1] for p in raw_hist]))
                 sx, sy = smoother.apply(mx, my, now)
-                cursor.move_norm(sx, sy)
+                # Deadzone with hysteresis: sub-pixel-scale wobble around the
+                # last sent position is swallowed; a slow drift accumulates
+                # until it clears the threshold and then goes through.
+                if (sent is None or abs(sx - sent[0]) > dead_x
+                        or abs(sy - sent[1]) > dead_y):
+                    cursor.move_norm(sx, sy)
+                    sent = (sx, sy)
                 pred = (sx, sy)
             else:
                 tongue_since = None  # pointer lost: hold position, reset gesture
@@ -453,6 +468,7 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 release()
                 smoother.reset()
                 raw_hist.clear()
+                sent = None
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:
