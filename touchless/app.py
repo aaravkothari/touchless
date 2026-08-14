@@ -376,6 +376,14 @@ def _run_hand(cfg: Config, wrist: bool = False):
     fps = _Fps()
     raw_hist: deque[tuple[float, float]] = deque(maxlen=3)  # spike pre-filter
     anchor: np.ndarray | None = None
+    # Stillness gate state: while the finger isn't deliberately moving, the
+    # anchor tracks the pointer 1:1 so landmark drift never reaches the
+    # cursor (drift is unbounded, so no deadzone could absorb it).
+    prev_pointer: np.ndarray | None = None
+    prev_t: float | None = None
+    speed = 0.0            # EMA of gain-scaled pointer speed, screens/s
+    still = False
+    still_since: float | None = None
     tongue_since: float | None = None
     last_recenter = 0.0
     held: str | None = None   # which mouse button is currently down
@@ -405,6 +413,31 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 pointer = s.pointer_rel if wrist else s.pointer
                 if anchor is None:
                     anchor = pointer.copy()  # first sighting = neutral
+
+                # Stillness gate. Gain-scaled speed means the thresholds are
+                # in screen units and mode-independent.
+                if prev_pointer is not None and prev_t is not None and now > prev_t:
+                    dp = pointer - prev_pointer
+                    v = float(np.hypot(gain_x * dp[0], gain_y * dp[1])) / (now - prev_t)
+                    speed = 0.5 * speed + 0.5 * v
+                if still:
+                    if speed > cfg.hand_still_exit:
+                        still = False
+                        still_since = None
+                    elif prev_pointer is not None:
+                        # Fold landmark wander into the anchor: d stays
+                        # constant, cursor rock-solid, and when movement
+                        # resumes there's no jump and no built-up drift.
+                        anchor += pointer - prev_pointer
+                elif speed < cfg.hand_still_enter:
+                    if still_since is None:
+                        still_since = now
+                    if now - still_since >= cfg.hand_still_hold_s:
+                        still = True
+                else:
+                    still_since = None
+                prev_pointer = pointer.copy()
+                prev_t = now
 
                 # Tongue out (held briefly) -> recenter and re-anchor.
                 if face.ok and face.tongue > cfg.tongue_threshold:
@@ -440,6 +473,8 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 pred = (sx, sy)
             else:
                 tongue_since = None  # pointer lost: hold position, reset gesture
+                prev_pointer = prev_t = still_since = None
+                still, speed = False, 0.0
 
             # Left-hand pinches -> mouse buttons. Lost hand = huge pinch
             # value, so a held button always releases. While one button is
@@ -472,6 +507,8 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 smoother.reset()
                 raw_hist.clear()
                 sent = None
+                prev_pointer = prev_t = still_since = None
+                still, speed = False, 0.0
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:
