@@ -34,8 +34,9 @@ WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_MCP, MIDDLE_TIP = 0, 4, 8, 9, 12
 class HandSample:
     pointer_ok: bool = False
     pointer: np.ndarray | None = None   # (2,) right index tip, normalized cam coords
-    pointer_rel: np.ndarray | None = None  # (2,) (index tip - wrist) / hand size:
-                                           # wrist-invariant, depth-invariant
+    pointer_rel: np.ndarray | None = None  # (2,) (index tip - forearm ref) / hand
+                                           # size: wrist-invariant, depth-invariant
+    ref_px: np.ndarray | None = None    # (2,) forearm reference point, px (for HUD)
     left_ok: bool = False
     pinch_index: float = 9.9            # left thumb<->index dist / hand size
     pinch_middle: float = 9.9           # left thumb<->middle dist / hand size
@@ -76,6 +77,7 @@ class HandTracker:
         )
         self._t0 = time.monotonic()
         self._last_ts_ms = -1
+        self._size_ema: float | None = None
 
     def _user_hand(self, label: str) -> str:
         """Which of the user's hands a reported handedness label refers to.
@@ -112,11 +114,23 @@ class HandTracker:
                 sample.pointer_ok = True
                 sample.pointer = lm[INDEX_TIP].copy()
                 size = float(np.linalg.norm(lm[MIDDLE_MCP] - lm[WRIST])) + 1e-9
-                sample.pointer_rel = (lm[INDEX_TIP] - lm[WRIST]) / size
+                # Hand size jitters frame to frame and multiplies straight
+                # into pointer_rel, so normalize by a smoothed size instead.
+                self._size_ema = (size if self._size_ema is None
+                                  else 0.8 * self._size_ema + 0.2 * size)
+                # The wrist landmark sits at the base of the palm; the actual
+                # reference lives below it on the forearm - extend the
+                # middle-MCP -> wrist axis past the wrist by ref_drop
+                # hand-sizes.
+                ref = lm[WRIST] + self.cfg.hand_wrist_ref_drop * (lm[WRIST] - lm[MIDDLE_MCP])
+                sample.pointer_rel = (lm[INDEX_TIP] - ref) / self._size_ema
+                sample.ref_px = ref * np.array([w, h])
             elif label == "Left":
                 sample.left_ok = True
                 sample.pinch_index = pinch_amount(lm, INDEX_TIP)
                 sample.pinch_middle = pinch_amount(lm, MIDDLE_TIP)
+        if not sample.pointer_ok:
+            self._size_ema = None  # hand lost: next sighting may be at a new depth
         return sample
 
     def close(self):

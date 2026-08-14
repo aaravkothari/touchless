@@ -70,6 +70,17 @@ class Config:
     # screens per hand-size of fingertip travel.
     hand_wrist_gain_x: float = 2.5     # side-to-side finger wag has small range
     hand_wrist_gain_y: float = 1.6     # curl/extend has more range than the wag
+    # Reference point: the wrist landmark sits at the base of the palm,
+    # which reads as "too high" - the reference is extrapolated this many
+    # hand-sizes below it, onto the forearm.
+    hand_wrist_ref_drop: float = 0.6
+    # The rel signal is noisier than the absolute pointer (two jittering
+    # landmarks + normalization), so rest smoothing is much heavier here.
+    hand_wrist_smooth_min_cutoff: float = 0.12
+    hand_wrist_smooth_beta: float = 1.2
+    # Cursor moves smaller than this many pixels are swallowed (hysteresis:
+    # slow drifts still accumulate and get through). Kills at-rest shake.
+    hand_deadzone_px: int = 5
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press
