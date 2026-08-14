@@ -87,10 +87,14 @@ def _face_hud_extras(s):
     return s.landmarks[list(_HUD_LANDMARKS)], s.depth
 
 
-def _hand_telemetry(s, face, fps, status, held=None):
+def _hand_telemetry(s, face, fps, status, held=None, wrist=False):
     lines = [f"{status}   {fps:4.1f} fps"]
     if s.pointer_ok:
-        lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, {s.pointer[1]:.2f})  <- moves")
+        if wrist:
+            lines.append(f"RIGHT tip-wrist ({s.pointer_rel[0]:+.2f}, "
+                         f"{s.pointer_rel[1]:+.2f})  <- moves (wrist-relative)")
+        else:
+            lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, {s.pointer[1]:.2f})  <- moves")
     else:
         lines.append("RIGHT hand: NOT FOUND (point with your right index finger)")
     if s.left_ok:
@@ -133,8 +137,8 @@ class _Fps:
 
 def preview(cfg: Config, input_mode: str = "gaze"):
     """Show tracking output. Use this to verify lighting/camera before calibrating."""
-    if input_mode == "hand":
-        _preview_hand(cfg)
+    if input_mode in ("hand", "hand-wrist"):
+        _preview_hand(cfg, wrist=input_mode == "hand-wrist")
         return
     model = _load_model(cfg)  # optional: shows live prediction if calibrated
     tracker = FaceTracker(cfg)
@@ -189,15 +193,17 @@ class _HandStack:
         self.camera.close()
 
 
-def _preview_hand(cfg: Config):
+def _preview_hand(cfg: Config, wrist: bool = False):
     stack = _HandStack(cfg)
     fps = _Fps()
+    label = "hand-wrist preview" if wrist else "hand preview"
     try:
         while True:
             frame, s, face = stack.read()
             if frame is None:
                 continue
-            lines = _hand_telemetry(s, face, fps.tick(), "hand preview - q to quit")
+            lines = _hand_telemetry(s, face, fps.tick(), f"{label} - q to quit",
+                                    wrist=wrist)
             cv2.imshow("touchless preview",
                        _draw_hud(frame, lines, points=_hand_points(s)))
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -231,11 +237,11 @@ def retrain(cfg: Config):
 
 def run(cfg: Config, click_mode: str, log_path: str | None = None,
         input_mode: str = "gaze"):
-    if input_mode == "hand":
+    if input_mode in ("hand", "hand-wrist"):
         if click_mode != "off":
             print("note: hand mode has a fixed control scheme (left-hand "
                   "pinches click, tongue recenters) - ignoring --click")
-        _run_hand(cfg)
+        _run_hand(cfg, wrist=input_mode == "hand-wrist")
         return
     if click_mode == "pinch":
         print("--click pinch is part of hand mode; gaze mode supports "
@@ -435,7 +441,7 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 elif ev_r == "up" and held == "right":
                     release()
 
-            lines = _hand_telemetry(s, face, fps.tick(), status, held)
+            lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist)
             cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
                                               points=_hand_points(s)))
 
