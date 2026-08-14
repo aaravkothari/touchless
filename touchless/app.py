@@ -326,15 +326,23 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None,
         cv2.destroyAllWindows()
 
 
-def _run_hand(cfg: Config):
+def _run_hand(cfg: Config, wrist: bool = False):
     """Hand mode: cursor = center + gain * (right index tip - anchor).
 
     x is flipped so moving your hand right moves the cursor right on an
     unmirrored frame. Controls: LEFT thumb+index pinch = left button,
     LEFT thumb+middle pinch = right button (held pinch = held button),
     tongue out = recenter + re-anchor.
+
+    wrist=True (hand-wrist mode): identical scheme, but the pointer is the
+    index tip RELATIVE to the wrist (hand-size units), so translating the
+    whole hand holds position and only finger articulation moves the cursor.
     """
-    print("Hand mode. RIGHT index finger moves the cursor.")
+    if wrist:
+        print("Hand-wrist mode. RIGHT index finger RELATIVE TO WRIST moves "
+              "the cursor - moving the whole hand does nothing.")
+    else:
+        print("Hand mode. RIGHT index finger moves the cursor.")
     print("LEFT thumb+index pinch = left click (hold to drag).")
     print("LEFT thumb+middle pinch = right click.")
     print("Stick your TONGUE out to recenter the cursor.")
@@ -343,6 +351,8 @@ def _run_hand(cfg: Config):
 
     stack = _HandStack(cfg)
     cursor = Cursor(cfg.screen_inset_px)
+    gain_x = cfg.hand_wrist_gain_x if wrist else cfg.hand_gain_x
+    gain_y = cfg.hand_wrist_gain_y if wrist else cfg.hand_gain_y
     smoother = OneEuro2D(cfg.hand_smooth_min_cutoff, cfg.hand_smooth_beta)
     left_pinch = PinchHold(cfg)
     right_pinch = PinchHold(cfg)
@@ -375,8 +385,9 @@ def _run_hand(cfg: Config):
             status = "PAUSED (space to resume)" if paused else "LIVE - q quit, space pause"
             pred = None
             if not paused and s.pointer_ok:
+                pointer = s.pointer_rel if wrist else s.pointer
                 if anchor is None:
-                    anchor = s.pointer.copy()  # first sighting = neutral
+                    anchor = pointer.copy()  # first sighting = neutral
 
                 # Tongue out (held briefly) -> recenter and re-anchor.
                 if face.ok and face.tongue > cfg.tongue_threshold:
@@ -384,7 +395,7 @@ def _run_hand(cfg: Config):
                         tongue_since = now
                     if (now - tongue_since >= cfg.tongue_hold_s
                             and now - last_recenter >= cfg.tongue_cooldown_s):
-                        anchor = s.pointer.copy()
+                        anchor = pointer.copy()
                         smoother.reset()
                         raw_hist.clear()
                         cursor.move_norm(0.5, 0.5)
@@ -392,9 +403,9 @@ def _run_hand(cfg: Config):
                 else:
                     tongue_since = None
 
-                d = s.pointer - anchor
-                nx = 0.5 - cfg.hand_gain_x * float(d[0])  # x flipped: mirror-natural
-                ny = 0.5 + cfg.hand_gain_y * float(d[1])
+                d = pointer - anchor
+                nx = 0.5 - gain_x * float(d[0])  # x flipped: mirror-natural
+                ny = 0.5 + gain_y * float(d[1])
                 nx = float(np.clip(nx, -cfg.pred_clamp, 1 + cfg.pred_clamp))
                 ny = float(np.clip(ny, -cfg.pred_clamp, 1 + cfg.pred_clamp))
                 raw_hist.append((nx, ny))
