@@ -81,6 +81,14 @@ class Config:
     # Cursor moves smaller than this many pixels are swallowed (hysteresis:
     # slow drifts still accumulate and get through). Kills at-rest shake.
     hand_deadzone_px: int = 5
+    # Stillness gate: landmark drift ("the dots recalibrating") is unbounded
+    # over time, so no deadzone can absorb it. Instead: when pointer speed
+    # (gain-scaled, screens/s) stays below `enter` for `hold_s`, the anchor
+    # tracks the pointer 1:1 - drift is eaten by the anchor, cursor freezes.
+    # Speed above `exit` unlocks instantly (exit > enter = no chatter).
+    hand_still_enter: float = 0.06
+    hand_still_exit: float = 0.15
+    hand_still_hold_s: float = 0.20
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press
