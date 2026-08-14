@@ -34,6 +34,8 @@ WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_MCP, MIDDLE_TIP = 0, 4, 8, 9, 12
 class HandSample:
     pointer_ok: bool = False
     pointer: np.ndarray | None = None   # (2,) right index tip, normalized cam coords
+    pointer_rel: np.ndarray | None = None  # (2,) (index tip - wrist) / hand size:
+                                           # wrist-invariant, depth-invariant
     left_ok: bool = False
     pinch_index: float = 9.9            # left thumb<->index dist / hand size
     pinch_middle: float = 9.9           # left thumb<->middle dist / hand size
@@ -109,6 +111,8 @@ class HandTracker:
             if label == "Right":
                 sample.pointer_ok = True
                 sample.pointer = lm[INDEX_TIP].copy()
+                size = float(np.linalg.norm(lm[MIDDLE_MCP] - lm[WRIST])) + 1e-9
+                sample.pointer_rel = (lm[INDEX_TIP] - lm[WRIST]) / size
             elif label == "Left":
                 sample.left_ok = True
                 sample.pinch_index = pinch_amount(lm, INDEX_TIP)
