@@ -1,0 +1,98 @@
+{
+  "touchless/__init__.py": {
+    "mtime": 1786555728.5485704,
+    "seen": 1786679953.209119,
+    "ast_hash": "d9a0b7f8e5bb3b5b364646849f4c24e6",
+    "semantic_hash": "d9a0b7f8e5bb3b5b364646849f4c24e6"
+  },
+  "touchless/__main__.py": {
+    "mtime": 1786679927.1598208,
+    "seen": 1786679953.209119,
+    "ast_hash": "4530063cd5a6c38dea3f136f3613476a",
+    "semantic_hash": ""
+  },
+  "touchless/app.py": {
+    "mtime": 1786679912.6670654,
+    "seen": 1786679953.209119,
+    "ast_hash": "ad746f0cab8524cdd087475e573fc59a",
+    "semantic_hash": ""
+  },
+  "touchless/calibration.py": {
+    "mtime": 1786559930.1817298,
+    "seen": 1786679953.209119,
+    "ast_hash": "4f5be489b17fcc1425ce24c0427e5dae",
+    "semantic_hash": "4f5be489b17fcc1425ce24c0427e5dae"
+  },
+  "touchless/camera.py": {
+    "mtime": 1786566924.4115932,
+    "seen": 1786679953.209119,
+    "ast_hash": "d4b679c945eae212dde1e52eea258a10",
+    "semantic_hash": "d4b679c945eae212dde1e52eea258a10"
+  },
+  "touchless/clicker.py": {
+    "mtime": 1786567211.5913374,
+    "seen": 1786679953.209119,
+    "ast_hash": "7a83fe7390f52920f310a4739f3ef08c",
+    "semantic_hash": "7a83fe7390f52920f310a4739f3ef08c"
+  },
+  "touchless/config.py": {
+    "mtime": 1786679844.653559,
+    "seen": 1786679953.209119,
+    "ast_hash": "2154af77febd7eac8721e5c4cbba1981",
+    "semantic_hash": ""
+  },
+  "touchless/hands.py": {
+    "mtime": 1786679831.8481674,
+    "seen": 1786679953.209119,
+    "ast_hash": "d096da1ac74179084949a0615ff00323",
+    "semantic_hash": ""
+  },
+  "touchless/model.py": {
+    "mtime": 1786559893.5825388,
+    "seen": 1786679953.209119,
+    "ast_hash": "a70ecb9df1e1283ee33f2405308acbf9",
+    "semantic_hash": "a70ecb9df1e1283ee33f2405308acbf9"
+  },
+  "touchless/mouse.py": {
+    "mtime": 1786565188.160247,
+    "seen": 1786679953.209119,
+    "ast_hash": "55d1ffd730040a4800cc110ca7489d7b",
+    "semantic_hash": "55d1ffd730040a4800cc110ca7489d7b"
+  },
+  "touchless/pursuit.py": {
+    "mtime": 1786559828.8330002,
+    "seen": 1786679953.209119,
+    "ast_hash": "01761a0816a880f4dd5a2959fdaa321d",
+    "semantic_hash": "01761a0816a880f4dd5a2959fdaa321d"
+  },
+  "touchless/smoothing.py": {
+    "mtime": 1786555774.8225915,
+    "seen": 1786679953.209119,
+    "ast_hash": "0d2fc618b3de506490bea76d220f1da8",
+    "semantic_hash": "0d2fc618b3de506490bea76d220f1da8"
+  },
+  "touchless/tracking.py": {
+    "mtime": 1786565137.9934103,
+    "seen": 1786679953.209119,
+    "ast_hash": "3df84cc2964e4af884e7cff0f2790c65",
+    "semantic_hash": "3df84cc2964e4af884e7cff0f2790c65"
+  },
+  "CLAUDE.md": {
+    "mtime": 1786679494.345183,
+    "seen": 1786679953.209119,
+    "ast_hash": "8a6643a420fdad6bfb583523bc6cef16",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1786566570.431995,
+    "seen": 1786679953.209119,
+    "ast_hash": "4765f3178925c91835e8d308c95687c6",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1786559997.8990154,
+    "seen": 1786679953.209119,
+    "ast_hash": "3be2a9785d38867037dfacba9ec8ab72",
+    "semantic_hash": ""
+  }
+}
