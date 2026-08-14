@@ -62,6 +62,14 @@ class Config:
     hand_frame_width: int = 640
     hand_frame_height: int = 480
     hand_labels_flipped: bool = False  # flip if preview labels your hands wrong
+    # --- Hand-wrist mode (run --input hand-wrist) ---
+    # Pointer = right index tip RELATIVE to the wrist, so moving the whole
+    # hand around does nothing - only articulating the finger moves the
+    # cursor. The rel vector is in hand-size units (not camera widths), so
+    # these gains live on a different scale than hand_gain_*:
+    # screens per hand-size of fingertip travel.
+    hand_wrist_gain_x: float = 2.5     # side-to-side finger wag has small range
+    hand_wrist_gain_y: float = 1.6     # curl/extend has more range than the wag
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press
