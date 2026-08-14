@@ -1,0 +1,374 @@
+{
+  "communities": {
+    "0": [
+      "touchless_app",
+      "touchless_app_draw_hud",
+      "touchless_app_face_hud_extras",
+      "touchless_app_fps",
+      "touchless_app_fps_init",
+      "touchless_app_fps_tick",
+      "touchless_app_hand_points",
+      "touchless_app_hand_telemetry",
+      "touchless_app_load_model",
+      "touchless_app_preview",
+      "touchless_app_preview_hand",
+      "touchless_app_rationale_1",
+      "touchless_app_rationale_135",
+      "touchless_app_rationale_330",
+      "touchless_app_rationale_37",
+      "touchless_app_rationale_52",
+      "touchless_app_rationale_84",
+      "touchless_app_run",
+      "touchless_app_run_hand",
+      "touchless_app_telemetry",
+      "touchless_clicker",
+      "touchless_clicker_blinkclicker",
+      "touchless_clicker_blinkclicker_update",
+      "touchless_clicker_dwellclicker",
+      "touchless_clicker_dwellclicker_init",
+      "touchless_clicker_dwellclicker_progress",
+      "touchless_clicker_dwellclicker_update",
+      "touchless_clicker_pinchhold",
+      "touchless_clicker_pinchhold_init",
+      "touchless_clicker_pinchhold_update",
+      "touchless_clicker_rationale_1",
+      "touchless_clicker_rationale_38",
+      "touchless_clicker_rationale_45",
+      "touchless_clicker_rationale_74",
+      "touchless_clicker_rationale_9"
+    ],
+    "1": [
+      "touchless_app_handstack",
+      "touchless_app_handstack_close",
+      "touchless_app_handstack_init",
+      "touchless_app_handstack_read",
+      "touchless_app_rationale_162",
+      "touchless_camera",
+      "touchless_camera_camera",
+      "touchless_camera_camera_close",
+      "touchless_camera_camera_init",
+      "touchless_camera_camera_read",
+      "touchless_camera_py_ndarray",
+      "touchless_camera_rationale_1",
+      "touchless_hands",
+      "touchless_hands_ensure_hand_model",
+      "touchless_hands_handsample",
+      "touchless_hands_handtracker",
+      "touchless_hands_handtracker_close",
+      "touchless_hands_handtracker_init",
+      "touchless_hands_handtracker_process",
+      "touchless_hands_handtracker_read",
+      "touchless_hands_handtracker_user_hand",
+      "touchless_hands_pinch_amount",
+      "touchless_hands_py_ndarray",
+      "touchless_hands_py_path",
+      "touchless_hands_rationale_1",
+      "touchless_hands_rationale_44",
+      "touchless_hands_rationale_50",
+      "touchless_hands_rationale_60",
+      "touchless_hands_rationale_79",
+      "touchless_hands_rationale_89",
+      "touchless_hands_rationale_96",
+      "touchless_tracking_ensure_model",
+      "touchless_tracking_facetracker_init",
+      "touchless_tracking_py_path",
+      "touchless_tracking_rationale_90"
+    ],
+    "2": [
+      "touchless_model_axishgb",
+      "touchless_model_axishgb_fit",
+      "touchless_model_axishgb_init",
+      "touchless_model_axishgb_predict",
+      "touchless_model_expand",
+      "touchless_model_py_ndarray",
+      "touchless_model_rationale_102",
+      "touchless_model_rationale_41",
+      "touchless_model_rationale_47",
+      "touchless_model_rationale_84",
+      "touchless_model_ridgephysics",
+      "touchless_model_ridgephysics_design",
+      "touchless_model_ridgephysics_fit",
+      "touchless_model_ridgephysics_init",
+      "touchless_model_ridgephysics_predict",
+      "touchless_model_ridgephysics_solve",
+      "touchless_model_skmlp",
+      "touchless_model_skmlp_fit",
+      "touchless_model_skmlp_init",
+      "touchless_model_skmlp_predict"
+    ],
+    "3": [
+      "touchless_tracking_facesample",
+      "touchless_tracking_facesample_depth",
+      "touchless_tracking_facesample_f",
+      "touchless_tracking_facesample_gaze_x",
+      "touchless_tracking_facesample_gaze_y",
+      "touchless_tracking_facesample_pitch",
+      "touchless_tracking_facesample_roll",
+      "touchless_tracking_facesample_tx",
+      "touchless_tracking_facesample_ty",
+      "touchless_tracking_facesample_yaw",
+      "touchless_tracking_facetracker_process",
+      "touchless_tracking_facetracker_read",
+      "touchless_tracking_py_ndarray",
+      "touchless_tracking_rationale_101",
+      "touchless_tracking_rationale_147",
+      "touchless_tracking_rationale_154",
+      "touchless_tracking_rationale_85",
+      "touchless_tracking_tongue_score"
+    ],
+    "4": [
+      "touchless_smoothing",
+      "touchless_smoothing_alpha",
+      "touchless_smoothing_lowpass",
+      "touchless_smoothing_lowpass_apply",
+      "touchless_smoothing_lowpass_init",
+      "touchless_smoothing_oneeuro",
+      "touchless_smoothing_oneeuro2d",
+      "touchless_smoothing_oneeuro2d_apply",
+      "touchless_smoothing_oneeuro2d_init",
+      "touchless_smoothing_oneeuro2d_reset",
+      "touchless_smoothing_oneeuro_apply",
+      "touchless_smoothing_oneeuro_init",
+      "touchless_smoothing_oneeuro_reset",
+      "touchless_smoothing_rationale_1",
+      "touchless_smoothing_rationale_57"
+    ],
+    "5": [
+      "touchless_calibration",
+      "touchless_calibration_check_targets",
+      "touchless_calibration_collect_dot",
+      "touchless_calibration_instruction_screen",
+      "touchless_calibration_py_ndarray",
+      "touchless_calibration_rationale_1",
+      "touchless_calibration_rationale_134",
+      "touchless_calibration_rationale_24",
+      "touchless_calibration_rationale_33",
+      "touchless_calibration_rationale_39",
+      "touchless_calibration_rationale_60",
+      "touchless_calibration_robust_mean",
+      "touchless_calibration_run_calibration"
+    ],
+    "6": [
+      "touchless_model",
+      "touchless_model_build_dataset",
+      "touchless_model_candidates",
+      "touchless_model_gazemodel",
+      "touchless_model_gazemodel_fit",
+      "touchless_model_gazemodel_load",
+      "touchless_model_gazemodel_predict",
+      "touchless_model_gazemodel_save",
+      "touchless_model_rationale_1",
+      "touchless_model_rationale_129",
+      "touchless_model_rationale_158",
+      "touchless_model_temporal_split"
+    ],
+    "7": [
+      "touchless_app_calibrate",
+      "touchless_app_rationale_221",
+      "touchless_app_retrain",
+      "touchless_clicker_blinkclicker_init",
+      "touchless_config",
+      "touchless_config_config",
+      "touchless_config_rationale_1",
+      "touchless_init",
+      "touchless_init_rationale_1",
+      "touchless_main",
+      "touchless_main_main",
+      "touchless_main_rationale_1"
+    ],
+    "8": [
+      "touchless_mouse",
+      "touchless_mouse_cursor",
+      "touchless_mouse_cursor_click",
+      "touchless_mouse_cursor_down",
+      "touchless_mouse_cursor_init",
+      "touchless_mouse_cursor_move_norm",
+      "touchless_mouse_cursor_position",
+      "touchless_mouse_cursor_up",
+      "touchless_mouse_rationale_1",
+      "touchless_mouse_rationale_22"
+    ],
+    "9": [
+      "touchless_pursuit",
+      "touchless_pursuit_collect",
+      "touchless_pursuit_pursuitdata",
+      "touchless_pursuit_pursuitdata_concat",
+      "touchless_pursuit_pursuitdata_load",
+      "touchless_pursuit_pursuitdata_save",
+      "touchless_pursuit_rationale_1",
+      "touchless_pursuit_rationale_117",
+      "touchless_tracking",
+      "touchless_tracking_facetracker",
+      "touchless_tracking_facetracker_close",
+      "touchless_tracking_rationale_1",
+      "touchless_tracking_rationale_126"
+    ],
+    "11": [
+      "touchless_pursuit_py_ndarray",
+      "touchless_pursuit_rationale_53",
+      "touchless_pursuit_wander",
+      "touchless_pursuit_wander_init",
+      "touchless_pursuit_wander_next_waypoint",
+      "touchless_pursuit_wander_pos_at"
+    ]
+  },
+  "cohesion": {
+    "0": 0.10588235294117647,
+    "1": 0.08235294117647059,
+    "2": 0.1368421052631579,
+    "3": 0.1830065359477124,
+    "4": 0.17142857142857143,
+    "5": 0.21794871794871795,
+    "6": 0.21212121212121213,
+    "7": 0.22727272727272727,
+    "8": 0.2,
+    "9": 0.21794871794871795,
+    "11": 0.4666666666666667
+  },
+  "gods": [
+    {
+      "id": "touchless_config_config",
+      "label": "Config",
+      "degree": 49
+    },
+    {
+      "id": "touchless_tracking_facetracker",
+      "label": "FaceTracker",
+      "degree": 21
+    },
+    {
+      "id": "touchless_app_fps",
+      "label": "_Fps",
+      "degree": 19
+    },
+    {
+      "id": "touchless_app_handstack",
+      "label": "_HandStack",
+      "degree": 19
+    },
+    {
+      "id": "touchless_tracking_facesample",
+      "label": "FaceSample",
+      "degree": 18
+    },
+    {
+      "id": "touchless_camera_camera",
+      "label": "Camera",
+      "degree": 17
+    },
+    {
+      "id": "touchless_pursuit_pursuitdata",
+      "label": "PursuitData",
+      "degree": 17
+    },
+    {
+      "id": "touchless_app_run",
+      "label": "run()",
+      "degree": 14
+    },
+    {
+      "id": "touchless_hands_handtracker",
+      "label": "HandTracker",
+      "degree": 13
+    },
+    {
+      "id": "touchless_model_gazemodel",
+      "label": "GazeModel",
+      "degree": 13
+    }
+  ],
+  "surprises": [
+    {
+      "source": "_Fps",
+      "target": "Camera",
+      "source_files": [
+        "touchless/app.py",
+        "touchless/camera.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    },
+    {
+      "source": "_Fps",
+      "target": "Config",
+      "source_files": [
+        "touchless/app.py",
+        "touchless/config.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    },
+    {
+      "source": "_Fps",
+      "target": "HandTracker",
+      "source_files": [
+        "touchless/app.py",
+        "touchless/hands.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    },
+    {
+      "source": "_Fps",
+      "target": "GazeModel",
+      "source_files": [
+        "touchless/app.py",
+        "touchless/model.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    },
+    {
+      "source": "_Fps",
+      "target": "Cursor",
+      "source_files": [
+        "touchless/app.py",
+        "touchless/mouse.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `Config` connect `Config` to `app.py`, `_HandStack`, `RidgePhysics`, `FaceSample`, `calibration.py`, `model.py`, `FaceTracker`, `_Wander`?",
+      "why": "High betweenness centrality (0.369) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `FaceSample` connect `FaceSample` to `app.py`, `_HandStack`, `FaceTracker`, `Config`?",
+      "why": "High betweenness centrality (0.119) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `HandTracker` connect `_HandStack` to `app.py`, `Config`?",
+      "why": "High betweenness centrality (0.078) - this node is a cross-community bridge."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 16 inferred relationships involving `Config` (e.g. with `_Fps` and `_HandStack`) actually correct?",
+      "why": "`Config` has 16 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 6 inferred relationships involving `FaceTracker` (e.g. with `_Fps` and `_HandStack`) actually correct?",
+      "why": "`FaceTracker` has 6 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 12 inferred relationships involving `_Fps` (e.g. with `Camera` and `BlinkClicker`) actually correct?",
+      "why": "`_Fps` has 12 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 12 inferred relationships involving `_HandStack` (e.g. with `Camera` and `BlinkClicker`) actually correct?",
+      "why": "`_HandStack` has 12 INFERRED edges - model-reasoned connections that need verification."
+    }
+  ]
+}
