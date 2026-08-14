@@ -82,13 +82,17 @@ class Config:
     # slow drifts still accumulate and get through). Kills at-rest shake.
     hand_deadzone_px: int = 5
     # Stillness gate: landmark drift ("the dots recalibrating") is unbounded
-    # over time, so no deadzone can absorb it. Instead: when pointer speed
-    # (gain-scaled, screens/s) stays below `enter` for `hold_s`, the anchor
-    # tracks the pointer 1:1 - drift is eaten by the anchor, cursor freezes.
-    # Speed above `exit` unlocks instantly (exit > enter = no chatter).
-    hand_still_enter: float = 0.06
-    hand_still_exit: float = 0.15
-    hand_still_hold_s: float = 0.20
+    # over time, so no deadzone can absorb it. When the finger is judged
+    # still, the anchor tracks the pointer 1:1 - drift is eaten by the
+    # anchor, cursor freezes. Detection is POSITIONAL, not velocity-based:
+    # per-frame jitter makes instantaneous speed look huge (especially in
+    # wrist mode's hand-size units) but positions still cluster tightly.
+    # All distances are gain-scaled screen fractions.
+    hand_still_enter: float = 0.035   # window spread below this = lock
+    hand_still_exit: float = 0.06     # stray this far from the lock = unlock
+    hand_still_window_s: float = 0.35  # how much recent history the spread uses
+    hand_still_lock_adapt: float = 0.02  # lock point EMA/frame: slow drift
+                                         # tracks, deliberate moves don't
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press

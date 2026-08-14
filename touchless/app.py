@@ -87,16 +87,17 @@ def _face_hud_extras(s):
     return s.landmarks[list(_HUD_LANDMARKS)], s.depth
 
 
-def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still=False):
+def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still_info=None):
     lines = [f"{status}   {fps:4.1f} fps"]
     if s.pointer_ok:
-        tag = "  [STILL]" if still else ""
         if wrist:
             lines.append(f"RIGHT tip-wrist ({s.pointer_rel[0]:+.2f}, "
-                         f"{s.pointer_rel[1]:+.2f})  <- moves (wrist-relative){tag}")
+                         f"{s.pointer_rel[1]:+.2f})  <- moves (wrist-relative)")
         else:
             lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, "
-                         f"{s.pointer[1]:.2f})  <- moves{tag}")
+                         f"{s.pointer[1]:.2f})  <- moves")
+        if still_info:
+            lines.append(still_info)
     else:
         lines.append("RIGHT hand: NOT FOUND (point with your right index finger)")
     if s.left_ok:
@@ -382,10 +383,10 @@ def _run_hand(cfg: Config, wrist: bool = False):
     # anchor tracks the pointer 1:1 so landmark drift never reaches the
     # cursor (drift is unbounded, so no deadzone could absorb it).
     prev_pointer: np.ndarray | None = None
-    prev_t: float | None = None
-    speed = 0.0            # EMA of gain-scaled pointer speed, screens/s
+    win: deque[tuple[float, np.ndarray]] = deque()  # (t, gain-scaled pointer)
     still = False
-    still_since: float | None = None
+    lock: np.ndarray | None = None  # gain-scaled position we locked at
+    spread = 9.9
     tongue_since: float | None = None
     last_recenter = 0.0
     held: str | None = None   # which mouse button is currently down
@@ -416,30 +417,34 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 if anchor is None:
                     anchor = pointer.copy()  # first sighting = neutral
 
-                # Stillness gate. Gain-scaled speed means the thresholds are
-                # in screen units and mode-independent.
-                if prev_pointer is not None and prev_t is not None and now > prev_t:
-                    dp = pointer - prev_pointer
-                    v = float(np.hypot(gain_x * dp[0], gain_y * dp[1])) / (now - prev_t)
-                    speed = 0.5 * speed + 0.5 * v
+                # Stillness gate, positional: jitter makes instantaneous
+                # velocity useless (wrist mode never read as still), but
+                # jitter clusters around a point - so judge stillness by the
+                # spread of recent gain-scaled positions instead.
+                gp = np.array([gain_x * pointer[0], gain_y * pointer[1]])
+                win.append((now, gp))
+                while win and now - win[0][0] > cfg.hand_still_window_s:
+                    win.popleft()
                 if still:
-                    if speed > cfg.hand_still_exit:
-                        still = False
-                        still_since = None
-                    elif prev_pointer is not None:
+                    if prev_pointer is not None:
                         # Fold landmark wander into the anchor: d stays
                         # constant, cursor rock-solid, and when movement
                         # resumes there's no jump and no built-up drift.
                         anchor += pointer - prev_pointer
-                elif speed < cfg.hand_still_enter:
-                    if still_since is None:
-                        still_since = now
-                    if now - still_since >= cfg.hand_still_hold_s:
+                    # The lock point creeps after slow drift so drift alone
+                    # never unlocks; deliberate moves outrun it and do.
+                    lock += cfg.hand_still_lock_adapt * (gp - lock)
+                    if float(np.linalg.norm(gp - lock)) > cfg.hand_still_exit:
+                        still = False
+                        win.clear()  # relocking needs a fresh quiet window
+                elif len(win) >= 3 and now - win[0][0] >= 0.8 * cfg.hand_still_window_s:
+                    pts = np.stack([p for _, p in win])
+                    spread = float(np.max(
+                        np.linalg.norm(pts - pts.mean(axis=0), axis=1)))
+                    if spread < cfg.hand_still_enter:
                         still = True
-                else:
-                    still_since = None
+                        lock = gp.copy()
                 prev_pointer = pointer.copy()
-                prev_t = now
 
                 # Tongue out (held briefly) -> recenter and re-anchor.
                 if face.ok and face.tongue > cfg.tongue_threshold:
@@ -475,8 +480,9 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 pred = (sx, sy)
             else:
                 tongue_since = None  # pointer lost: hold position, reset gesture
-                prev_pointer = prev_t = still_since = None
-                still, speed = False, 0.0
+                prev_pointer = None
+                still = False
+                win.clear()
 
             # Left-hand pinches -> mouse buttons. Lost hand = huge pinch
             # value, so a held button always releases. While one button is
@@ -496,7 +502,16 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 elif ev_r == "up" and held == "right":
                     release()
 
-            lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist, still)
+            if still and lock is not None and prev_pointer is not None:
+                gap = float(np.linalg.norm(
+                    np.array([gain_x * prev_pointer[0], gain_y * prev_pointer[1]]) - lock))
+                still_info = (f"still LOCKED   gap {gap:.3f} "
+                              f"(> {cfg.hand_still_exit:.3f} unlocks)")
+            else:
+                still_info = (f"still live     spread {spread:.3f} "
+                              f"(< {cfg.hand_still_enter:.3f} locks)")
+            lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist,
+                                    still_info)
             cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
                                               points=_hand_points(s, show_ref=wrist)))
 
@@ -509,8 +524,9 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 smoother.reset()
                 raw_hist.clear()
                 sent = None
-                prev_pointer = prev_t = still_since = None
-                still, speed = False, 0.0
+                prev_pointer = None
+                still = False
+                win.clear()
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:
