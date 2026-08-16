@@ -33,6 +33,12 @@ SPIKE_MAG = 5.0       # spike magnitude, in units of sigma
 DRIFT_STD_PER_S = 0.001  # slow landmark drift ("the dots recalibrating"):
                          # ~0.65 camera px per sqrt(s) at 640 wide, which is
                          # already harsher than MediaPipe on a parked hand
+# Palm re-detection events: in VIDEO mode MediaPipe skips the detector
+# while tracking succeeds; when presence confidence dips, detection
+# re-runs and the landmarks re-solve to a slightly different answer - a
+# PERSISTENT step, unlike a spike frame. "The dots recalculating."
+REDETECT_EVERY_S = 2.5     # mean seconds between re-detections
+REDETECT_STEP_MULT = 2.5   # step sigma, in multiples of frame-noise sigma
 
 # (phase name, duration s). still1 = the core complaint: finger dead still.
 # slow = a deliberate precise move well below the gate's instant-exit rate.
@@ -51,6 +57,8 @@ def make_track(rng, sigma, step, slow):
         for i in range(n):
             dt = (1.0 / FPS) * rng.uniform(0.85, 1.15)  # frame-time jitter
             t += dt
+            if rng.random() < dt / REDETECT_EVERY_S:
+                drift = drift + rng.normal(0, REDETECT_STEP_MULT * sigma, 2)
             if name == "move":
                 base = base + np.array(step) / n  # linear glide
             if name == "slow":
@@ -84,7 +92,9 @@ def run(cfg, wrist, sigma, step, slow, seed=7):
     return ts, px, moved, locked, phases
 
 
-def still_stats(ts, px, moved, locked, phases, name, warmup_s=1.5):
+def still_stats(ts, px, moved, locked, phases, name, warmup_s=3.0):
+    # warmup covers first-lock (the 1.5s relock evidence horizon) plus the
+    # One Euro settling to the frozen offset - startup glide, not jitter.
     sel = phases == name
     t0 = ts[sel][0] + warmup_s  # let filters converge before judging
     sel &= ts > t0

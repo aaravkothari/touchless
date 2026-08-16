@@ -150,16 +150,47 @@ class HandPointerPipeline:
                     self.anchor -= self._absorbed - start
                 self._absorb_hist.clear()
             elif gap > self._exit_eff:
-                # Excursion frames are NOT absorbed into the anchor, so d
-                # starts tracking them immediately: if the excursion recedes
-                # (noise burst) d snaps back with zero residue; if it
-                # persists (a real move) no motion was lost when the gate
-                # finally opens.
+                # Excursion frames are NOT absorbed into the anchor, and
+                # the output stays frozen at the lock offset while they
+                # pend: a receding noise burst leaves zero residue, an
+                # absorbed re-detection step never blips the cursor, and
+                # a real move's pent-up motion is delivered as a catch-up
+                # glide when the gate opens - nothing is lost.
                 self._exit_pending += 1
+                hard_cap = 2 * self.cfg.hand_still_exit_frames
                 if self._exit_pending >= self.cfg.hand_still_exit_frames:
-                    self.still = False
-                    self._exit_pending = 0
-                    self.win.clear()  # relocking needs a fresh quiet window
+                    # Re-detection check before unlocking: a palm
+                    # re-detection re-solves the landmarks to a slightly
+                    # different answer - a persistent step that would
+                    # otherwise read as a real move and jump the cursor.
+                    # Signature: the excursion is RESTING at its new
+                    # position (last two gate values on top of each
+                    # other) and the step is modest. A real move is still
+                    # moving through this check and unlocks; a slow move
+                    # that sneaks through once keeps moving and unlocks
+                    # on the next 3-frame round, ~100 ms later.
+                    tail = np.stack([p for _, p in list(self.win)[-2:]])
+                    resting = (float(np.linalg.norm(tail[-1] - tail[0]))
+                               < 0.7 * self._enter_eff)
+                    step = float(np.linalg.norm(tail.mean(axis=0) - self.lock))
+                    if (resting and step
+                            < self.cfg.hand_still_step_mult * self._exit_eff):
+                        if self._absorbed is not None:
+                            self.anchor += pointer - self._absorbed
+                        self._absorbed = pointer.copy()
+                        self._absorb_hist.append((now, pointer.copy()))
+                        self.lock = tail.mean(axis=0)
+                        self._exit_pending = 0
+                    elif self._exit_pending >= hard_cap:
+                        # Still moving after the extended window: real.
+                        self.still = False
+                        self._exit_pending = 0
+                        self.win.clear()  # relock needs a fresh quiet window
+                    # else: ambiguous (noise blurred the resting test) -
+                    # wait another frame. Cheap: the output is frozen at
+                    # the lock offset while pending, and on a real unlock
+                    # the pent-up motion is delivered as a catch-up glide,
+                    # so the extra frames lose nothing.
             else:
                 self._exit_pending = 0
                 # Fold landmark wander into the anchor: d stays constant,
@@ -210,11 +241,21 @@ class HandPointerPipeline:
 
         if recenter:
             self.anchor = pointer.copy()
+            if self.still:
+                self._absorbed = pointer.copy()  # keep frozen-d consistent
             self.smoother.reset()
             self.raw_hist.clear()
             self.sent = (0.5, 0.5)
 
-        d = pointer - self.anchor
+        # While locked, the output offset is computed from the last
+        # ABSORBED pointer, not the live one: in-sync frames are identical
+        # (absorption just set them equal), and pending excursion frames
+        # are held at the lock offset so a re-detection step under
+        # evaluation can't blip the cursor.
+        if self.still and self._absorbed is not None:
+            d = self._absorbed - self.anchor
+        else:
+            d = pointer - self.anchor
         nx = 0.5 - self.gain_x * float(d[0])  # x flipped: mirror-natural
         ny = 0.5 + self.gain_y * float(d[1])
         nx = float(np.clip(nx, -self.cfg.pred_clamp, 1 + self.cfg.pred_clamp))

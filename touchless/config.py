@@ -124,6 +124,14 @@ class Config:
     hand_still_exit_frames: int = 3   # excursion must persist this many
                                       # consecutive frames to unlock (a
                                       # 1-2 frame noise burst can't)
+    # Re-detection step absorption: when MediaPipe re-runs palm detection
+    # the landmarks re-solve to a slightly different answer - a PERSISTENT
+    # step, which would otherwise read as a real move and jump the cursor.
+    # A sustained excursion that is RESTING at its new position (tight
+    # cluster, no ongoing motion) and smaller than step_mult * exit is
+    # treated as the dots recalculating and absorbed. Real moves keep
+    # moving through the check and unlock as usual.
+    hand_still_step_mult: float = 3.0
     # Noise-adaptive thresholds: the pipeline estimates the setup's noise
     # scale online (25th percentile of recent frame-to-frame gate deltas -
     # deliberate movement can't inflate a low quantile) and uses
