@@ -78,6 +78,7 @@ class HandTracker:
         self._t0 = time.monotonic()
         self._last_ts_ms = -1
         self._size_ema: float | None = None
+        self._ref_ema: np.ndarray | None = None
 
     def _user_hand(self, label: str) -> str:
         """Which of the user's hands a reported handedness label refers to.
@@ -123,14 +124,23 @@ class HandTracker:
                 # middle-MCP -> wrist axis past the wrist by ref_drop
                 # hand-sizes.
                 ref = lm[WRIST] + self.cfg.hand_wrist_ref_drop * (lm[WRIST] - lm[MIDDLE_MCP])
-                sample.pointer_rel = (lm[INDEX_TIP] - ref) / self._size_ema
-                sample.ref_px = ref * np.array([w, h])
+                # The extrapolation mixes two landmarks (1.6*wrist -
+                # 0.6*MCP), ~tripling landmark noise variance, and it
+                # multiplies straight into pointer_rel - so smooth it. The
+                # ref only moves with whole-hand translation, which wrist
+                # mode ignores by design, so the lag is nearly free.
+                a = self.cfg.hand_wrist_ref_ema
+                self._ref_ema = (ref if self._ref_ema is None
+                                 else (1.0 - a) * self._ref_ema + a * ref)
+                sample.pointer_rel = (lm[INDEX_TIP] - self._ref_ema) / self._size_ema
+                sample.ref_px = self._ref_ema * np.array([w, h])
             elif label == "Left":
                 sample.left_ok = True
                 sample.pinch_index = pinch_amount(lm, INDEX_TIP)
                 sample.pinch_middle = pinch_amount(lm, MIDDLE_TIP)
         if not sample.pointer_ok:
             self._size_ema = None  # hand lost: next sighting may be at a new depth
+            self._ref_ema = None
         return sample
 
     def close(self):

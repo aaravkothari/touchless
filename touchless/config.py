@@ -79,6 +79,12 @@ class Config:
     # which reads as "too high" - the reference is extrapolated this many
     # hand-sizes below it, onto the forearm.
     hand_wrist_ref_drop: float = 0.6
+    # The extrapolated ref is 1.6*wrist - 0.6*MCP: ~3x the noise variance
+    # of a single landmark, multiplied straight into pointer_rel. EMA it
+    # (new-sample weight below). The ref only moves when the whole hand
+    # translates - which wrist mode deliberately ignores - so the lag this
+    # adds is nearly free; the noise cut (~30% of pointer_rel std) is not.
+    hand_wrist_ref_ema: float = 0.5
     # The rel signal is noisier than the absolute pointer (two jittering
     # landmarks + normalization), so rest smoothing is much heavier here.
     hand_wrist_smooth_min_cutoff: float = 0.12
