@@ -35,7 +35,9 @@ def main():
                        default="off",
                        help="click method (default off; pinch is hand-mode only)")
     p_run.add_argument("--log", metavar="FILE.csv", default=None,
-                       help="record features + predictions to a CSV (gaze mode)")
+                       help="record per-frame signals to a CSV (gaze: features"
+                            " + predictions; hand: pointer, gate state,"
+                            " cursor) - for offline stability analysis")
 
     args = parser.parse_args()
     cfg = Config(camera_index=args.camera)

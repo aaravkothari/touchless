@@ -248,7 +248,7 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None,
         if click_mode != "off":
             print("note: hand mode has a fixed control scheme (left-hand "
                   "pinches click, tongue recenters) - ignoring --click")
-        _run_hand(cfg, wrist=input_mode == "hand-wrist")
+        _run_hand(cfg, wrist=input_mode == "hand-wrist", log_path=log_path)
         return
     if click_mode == "pinch":
         print("--click pinch is part of hand mode; gaze mode supports "
@@ -339,7 +339,7 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None,
         cv2.destroyAllWindows()
 
 
-def _run_hand(cfg: Config, wrist: bool = False):
+def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
     """Hand mode: cursor = center + gain * (right index tip - anchor).
 
     x is flipped so moving your hand right moves the cursor right on an
@@ -373,6 +373,14 @@ def _run_hand(cfg: Config, wrist: bool = False):
     last_recenter = 0.0
     held: str | None = None   # which mouse button is currently down
     paused = False
+
+    log_fh = log_writer = None
+    if log_path:
+        log_fh = open(log_path, "w", newline="")
+        log_writer = csv.writer(log_fh)
+        log_writer.writerow(["t", "raw_x", "raw_y", "gate_x", "gate_y",
+                             "still", "spread", "enter_eff", "exit_eff",
+                             "smooth_x", "smooth_y", "moved"])
 
     def press(button: str):
         nonlocal held
@@ -414,6 +422,14 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 if moved:
                     cursor.move_norm(sx, sy)
                 pred = (sx, sy)
+                if log_writer is not None:
+                    log_writer.writerow(
+                        [f"{now:.3f}",
+                         f"{pointer[0]:.5f}", f"{pointer[1]:.5f}",
+                         f"{pipe._gp[0]:.5f}", f"{pipe._gp[1]:.5f}",
+                         int(pipe.still), f"{pipe.spread:.5f}",
+                         f"{pipe._enter_eff:.5f}", f"{pipe._exit_eff:.5f}",
+                         f"{sx:.5f}", f"{sy:.5f}", int(moved)])
             else:
                 tongue_since = None  # pointer lost: hold position, reset gesture
                 pipe.pointer_lost()
@@ -455,5 +471,8 @@ def _run_hand(cfg: Config, wrist: bool = False):
             release()  # never leave a mouse button stuck down
         except Exception:
             pass
+        if log_fh is not None:
+            log_fh.close()
+            print(f"Session log written to {log_path}")
         stack.close()
         cv2.destroyAllWindows()
