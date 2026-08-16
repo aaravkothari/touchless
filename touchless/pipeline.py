@@ -45,7 +45,8 @@ class HandPointerPipeline:
         self.still = False
         self.lock: np.ndarray | None = None  # gain-scaled position we locked at
         self.spread = 9.9
-        self._gp: np.ndarray | None = None   # last gain-scaled pointer (HUD)
+        self._gate_hist: deque[np.ndarray] = deque(maxlen=3)  # gate spike filter
+        self._gp: np.ndarray | None = None   # last gate signal (HUD)
 
     def update(self, pointer: np.ndarray, now: float,
                recenter: bool = False) -> tuple[float, float, bool]:
@@ -62,8 +63,15 @@ class HandPointerPipeline:
         # around a point - so judge stillness by the spread of recent
         # gain-scaled positions instead.
         gp = np.array([self.gain_x * pointer[0], self.gain_y * pointer[1]])
-        self._gp = gp
-        self.win.append((now, gp))
+        # The gate judges the median-of-3 of the gain-scaled pointer, not
+        # the raw value: a single spike frame would otherwise blow the
+        # window spread past the enter threshold (gate never locks) or the
+        # exit threshold (gate flaps), and spike frames are exactly the
+        # noise the gate exists to absorb.
+        self._gate_hist.append(gp)
+        ggp = np.median(np.stack(self._gate_hist), axis=0)
+        self._gp = ggp
+        self.win.append((now, ggp))
         while self.win and now - self.win[0][0] > self.cfg.hand_still_window_s:
             self.win.popleft()
         if self.still:
@@ -73,7 +81,7 @@ class HandPointerPipeline:
             # permanently - the spike reverts next frame but the anchor
             # doesn't, teleporting the cursor by gain*spike on every
             # spurious unlock.
-            if float(np.linalg.norm(gp - self.lock)) > self.cfg.hand_still_exit:
+            if float(np.linalg.norm(ggp - self.lock)) > self.cfg.hand_still_exit:
                 self.still = False
                 self.win.clear()  # relocking needs a fresh quiet window
             else:
@@ -84,7 +92,7 @@ class HandPointerPipeline:
                     self.anchor += pointer - self.prev_pointer
                 # The lock point creeps after slow drift so drift alone
                 # never unlocks; deliberate moves outrun it and do.
-                self.lock += self.cfg.hand_still_lock_adapt * (gp - self.lock)
+                self.lock += self.cfg.hand_still_lock_adapt * (ggp - self.lock)
         elif (len(self.win) >= 3
               and now - self.win[0][0] >= 0.8 * self.cfg.hand_still_window_s):
             pts = np.stack([p for _, p in self.win])
@@ -92,7 +100,10 @@ class HandPointerPipeline:
                 np.linalg.norm(pts - pts.mean(axis=0), axis=1)))
             if self.spread < self.cfg.hand_still_enter:
                 self.still = True
-                self.lock = gp.copy()
+                # Lock onto the cluster center, not whatever sample
+                # happened to arrive last (that can sit at the cluster
+                # edge, leaving half the exit margin already spent).
+                self.lock = pts.mean(axis=0)
         self.prev_pointer = pointer.copy()
 
         if recenter:
