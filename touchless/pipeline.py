@@ -67,17 +67,24 @@ class HandPointerPipeline:
         while self.win and now - self.win[0][0] > self.cfg.hand_still_window_s:
             self.win.popleft()
         if self.still:
-            if self.prev_pointer is not None:
-                # Fold landmark wander into the anchor: d stays constant,
-                # cursor rock-solid, and when movement resumes there's no
-                # jump and no built-up drift.
-                self.anchor += pointer - self.prev_pointer
-            # The lock point creeps after slow drift so drift alone never
-            # unlocks; deliberate moves outrun it and do.
-            self.lock += self.cfg.hand_still_lock_adapt * (gp - self.lock)
+            # Exit test FIRST: the frame that breaks the lock must NOT be
+            # folded into the anchor. Absorb-then-unlock bakes the breaking
+            # delta (often a one-frame landmark spike) into the anchor
+            # permanently - the spike reverts next frame but the anchor
+            # doesn't, teleporting the cursor by gain*spike on every
+            # spurious unlock.
             if float(np.linalg.norm(gp - self.lock)) > self.cfg.hand_still_exit:
                 self.still = False
                 self.win.clear()  # relocking needs a fresh quiet window
+            else:
+                if self.prev_pointer is not None:
+                    # Fold landmark wander into the anchor: d stays
+                    # constant, cursor rock-solid, and when movement
+                    # resumes there's no jump and no built-up drift.
+                    self.anchor += pointer - self.prev_pointer
+                # The lock point creeps after slow drift so drift alone
+                # never unlocks; deliberate moves outrun it and do.
+                self.lock += self.cfg.hand_still_lock_adapt * (gp - self.lock)
         elif (len(self.win) >= 3
               and now - self.win[0][0] >= 0.8 * self.cfg.hand_still_window_s):
             pts = np.stack([p for _, p in self.win])
