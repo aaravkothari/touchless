@@ -40,13 +40,14 @@ class HandPointerPipeline:
         # Stillness gate state: while the finger isn't deliberately moving,
         # the anchor tracks the pointer 1:1 so landmark drift never reaches
         # the cursor (drift is unbounded, so no deadzone could absorb it).
-        self.prev_pointer: np.ndarray | None = None
+        self._absorbed: np.ndarray | None = None  # pointer at last absorbed frame
         self.win: deque[tuple[float, np.ndarray]] = deque()  # (t, gain-scaled pointer)
         self.still = False
         self.lock: np.ndarray | None = None  # gain-scaled position we locked at
         self.spread = 9.9
         self._gate_hist: deque[np.ndarray] = deque(maxlen=3)  # gate spike filter
         self._gp: np.ndarray | None = None   # last gate signal (HUD)
+        self._exit_pending = 0  # consecutive frames past the exit threshold
 
     def update(self, pointer: np.ndarray, now: float,
                recenter: bool = False) -> tuple[float, float, bool]:
@@ -82,14 +83,29 @@ class HandPointerPipeline:
             # doesn't, teleporting the cursor by gain*spike on every
             # spurious unlock.
             if float(np.linalg.norm(ggp - self.lock)) > self.cfg.hand_still_exit:
-                self.still = False
-                self.win.clear()  # relocking needs a fresh quiet window
+                # Excursion frames are NOT absorbed into the anchor, so d
+                # starts tracking them immediately: if the excursion recedes
+                # (noise burst) d snaps back with zero residue; if it
+                # persists (a real move) no motion was lost when the gate
+                # finally opens.
+                self._exit_pending += 1
+                if self._exit_pending >= self.cfg.hand_still_exit_frames:
+                    self.still = False
+                    self._exit_pending = 0
+                    self.win.clear()  # relocking needs a fresh quiet window
             else:
-                if self.prev_pointer is not None:
-                    # Fold landmark wander into the anchor: d stays
-                    # constant, cursor rock-solid, and when movement
-                    # resumes there's no jump and no built-up drift.
-                    self.anchor += pointer - self.prev_pointer
+                self._exit_pending = 0
+                # Fold landmark wander into the anchor: d stays constant,
+                # cursor rock-solid, and when movement resumes there's no
+                # jump and no built-up drift. Absorption spans from the
+                # LAST ABSORBED frame, not the previous frame: a pending
+                # excursion that recedes gets its whole net delta folded
+                # in at once, so d snaps back to the lock-time value with
+                # zero residue (per-frame deltas would leak the episode's
+                # net noise offset into d permanently, a random walk).
+                if self._absorbed is not None:
+                    self.anchor += pointer - self._absorbed
+                self._absorbed = pointer.copy()
                 # The lock point creeps after slow drift so drift alone
                 # never unlocks; deliberate moves outrun it and do.
                 self.lock += self.cfg.hand_still_lock_adapt * (ggp - self.lock)
@@ -104,7 +120,8 @@ class HandPointerPipeline:
                 # happened to arrive last (that can sit at the cluster
                 # edge, leaving half the exit margin already spent).
                 self.lock = pts.mean(axis=0)
-        self.prev_pointer = pointer.copy()
+                self._exit_pending = 0
+                self._absorbed = pointer.copy()
 
         if recenter:
             self.anchor = pointer.copy()
@@ -132,8 +149,9 @@ class HandPointerPipeline:
 
     def pointer_lost(self):
         """Pointer left the frame: hold position, forget stillness state."""
-        self.prev_pointer = None
+        self._absorbed = None
         self.still = False
+        self._exit_pending = 0
         self.win.clear()
 
     def pause_reset(self):
@@ -141,8 +159,9 @@ class HandPointerPipeline:
         self.smoother.reset()
         self.raw_hist.clear()
         self.sent = None
-        self.prev_pointer = None
+        self._absorbed = None
         self.still = False
+        self._exit_pending = 0
         self.win.clear()
 
     def still_info(self) -> str:

@@ -93,6 +93,9 @@ class Config:
     hand_still_window_s: float = 0.35  # how much recent history the spread uses
     hand_still_lock_adapt: float = 0.02  # lock point EMA/frame: slow drift
                                          # tracks, deliberate moves don't
+    hand_still_exit_frames: int = 3   # excursion must persist this many
+                                      # consecutive frames to unlock (a
+                                      # 1-2 frame noise burst can't)
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press
