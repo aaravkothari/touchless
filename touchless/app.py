@@ -92,8 +92,8 @@ def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still_info=Non
     lines = [f"{status}   {fps:4.1f} fps"]
     if s.pointer_ok:
         if wrist:
-            lines.append(f"RIGHT tip-wrist ({s.pointer_rel[0]:+.2f}, "
-                         f"{s.pointer_rel[1]:+.2f})  <- moves (wrist-relative)")
+            lines.append(f"RIGHT tip-palm ({s.pointer_rel[0]:+.2f}, "
+                         f"{s.pointer_rel[1]:+.2f})  <- moves (palm-relative)")
         else:
             lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, "
                          f"{s.pointer[1]:.2f})  <- moves")
@@ -117,7 +117,7 @@ def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still_info=Non
 def _hand_points(s, show_ref=False):
     pts = [tuple(p) for _, lm in s.hands for p in lm]
     if show_ref and s.ref_px is not None:
-        pts.append(tuple(s.ref_px))  # virtual forearm reference dot
+        pts.append(tuple(s.ref_px))  # palm-centroid focus point dot
     return pts
 
 
@@ -348,12 +348,13 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
     tongue out = recenter + re-anchor.
 
     wrist=True (hand-wrist mode): identical scheme, but the pointer is the
-    index tip RELATIVE to the wrist (hand-size units), so translating the
-    whole hand holds position and only finger articulation moves the cursor.
+    index tip RELATIVE to the palm-knuckle centroid (hand-size units), so
+    moving the whole arm/hand holds position and only finger articulation
+    moves the cursor.
     """
     if wrist:
-        print("Hand-wrist mode. RIGHT index finger RELATIVE TO WRIST moves "
-              "the cursor - moving the whole hand does nothing.")
+        print("Hand-wrist mode. RIGHT index finger RELATIVE TO YOUR PALM "
+              "moves the cursor - moving the whole arm/hand does nothing.")
     else:
         print("Hand mode. RIGHT index finger moves the cursor.")
     print("LEFT thumb+index pinch = left click (hold to drag).")

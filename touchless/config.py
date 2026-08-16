@@ -81,22 +81,17 @@ class Config:
     # tip). 0 = pure tip.
     hand_pointer_blend: float = 0.35
     # --- Hand-wrist mode (run --input hand-wrist) ---
-    # Pointer = right index tip RELATIVE to the wrist, so moving the whole
-    # hand around does nothing - only articulating the finger moves the
-    # cursor. The rel vector is in hand-size units (not camera widths), so
-    # these gains live on a different scale than hand_gain_*:
-    # screens per hand-size of fingertip travel.
+    # Pointer = right index tip RELATIVE to a focus point on the hand (the
+    # palm-knuckle centroid), so moving the whole arm/hand does nothing -
+    # only articulating the finger moves the cursor. The rel vector is in
+    # hand-size units (not camera widths), so these gains live on a
+    # different scale than hand_gain_*: screens per hand-size of travel.
     hand_wrist_gain_x: float = 2.5     # side-to-side finger wag has small range
     hand_wrist_gain_y: float = 1.6     # curl/extend has more range than the wag
-    # Reference point: the wrist landmark sits at the base of the palm,
-    # which reads as "too high" - the reference is extrapolated this many
-    # hand-sizes below it, onto the forearm.
-    hand_wrist_ref_drop: float = 0.6
-    # The extrapolated ref is 1.6*wrist - 0.6*MCP: ~3x the noise variance
-    # of a single landmark, multiplied straight into pointer_rel. EMA it
-    # (new-sample weight below). The ref only moves when the whole hand
-    # translates - which wrist mode deliberately ignores - so the lag this
-    # adds is nearly free; the noise cut (~30% of pointer_rel std) is not.
+    # The focus point (palm-knuckle centroid) only moves when the whole
+    # hand moves - which wrist mode deliberately ignores - so EMA-ing it
+    # (new-sample weight below) costs nearly nothing in lag and cuts its
+    # noise further on top of the 4-landmark average.
     hand_wrist_ref_ema: float = 0.5
     # The rel signal is noisier than the absolute pointer (two jittering
     # landmarks + normalization), so rest smoothing is much heavier here.

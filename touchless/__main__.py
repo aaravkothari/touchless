@@ -29,8 +29,8 @@ def main():
                        default="gaze",
                        help="gaze = eyes+head (calibrate first); "
                             "hand = right index finger, no calibration needed; "
-                            "hand-wrist = index finger relative to wrist "
-                            "(moving the whole hand doesn't move the cursor)")
+                            "hand-wrist = index finger relative to the palm "
+                            "(moving the whole arm/hand doesn't move the cursor)")
     p_run.add_argument("--click", choices=["off", "dwell", "blink", "pinch"],
                        default="off",
                        help="click method (default off; pinch is hand-mode only)")

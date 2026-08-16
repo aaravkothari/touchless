@@ -28,15 +28,19 @@ MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "hand_landmarke
 
 # Hand landmark indices (21 per hand).
 WRIST, THUMB_TIP, INDEX_DIP, INDEX_TIP, MIDDLE_MCP, MIDDLE_TIP = 0, 4, 7, 8, 9, 12
+# The four finger-base knuckles: their centroid is the wrist-mode focus
+# point. Rigid under finger articulation, near the hand's rotation center,
+# and averaging four landmarks halves the noise of any single one.
+PALM_MCPS = (5, 9, 13, 17)
 
 
 @dataclass
 class HandSample:
     pointer_ok: bool = False
     pointer: np.ndarray | None = None   # (2,) right index tip, normalized cam coords
-    pointer_rel: np.ndarray | None = None  # (2,) (index tip - forearm ref) / hand
-                                           # size: wrist-invariant, depth-invariant
-    ref_px: np.ndarray | None = None    # (2,) forearm reference point, px (for HUD)
+    pointer_rel: np.ndarray | None = None  # (2,) (index tip - palm centroid) / hand
+                                           # size: hand-position/depth-invariant
+    ref_px: np.ndarray | None = None    # (2,) palm-centroid focus point, px (HUD)
     left_ok: bool = False
     pinch_index: float = 9.9            # left thumb<->index dist / hand size
     pinch_middle: float = 9.9           # left thumb<->middle dist / hand size
@@ -130,16 +134,14 @@ class HandTracker:
                 # into pointer_rel, so normalize by a smoothed size instead.
                 self._size_ema = (size if self._size_ema is None
                                   else 0.8 * self._size_ema + 0.2 * size)
-                # The wrist landmark sits at the base of the palm; the actual
-                # reference lives below it on the forearm - extend the
-                # middle-MCP -> wrist axis past the wrist by ref_drop
-                # hand-sizes.
-                ref = lm[WRIST] + self.cfg.hand_wrist_ref_drop * (lm[WRIST] - lm[MIDDLE_MCP])
-                # The extrapolation mixes two landmarks (1.6*wrist -
-                # 0.6*MCP), ~tripling landmark noise variance, and it
-                # multiplies straight into pointer_rel - so smooth it. The
-                # ref only moves with whole-hand translation, which wrist
-                # mode ignores by design, so the lag is nearly free.
+                # Focus point = palm-knuckle centroid: rigid while the
+                # index finger articulates (only the finger moves relative
+                # to it), and averaging four landmarks halves per-landmark
+                # noise (the old forearm extrapolation AMPLIFIED it 1.7x).
+                # EMA on top: the centroid only moves with whole-hand
+                # motion, which wrist mode ignores by design, so the lag
+                # is nearly free.
+                ref = lm[list(PALM_MCPS)].mean(axis=0)
                 a = self.cfg.hand_wrist_ref_ema
                 self._ref_ema = (ref if self._ref_ema is None
                                  else (1.0 - a) * self._ref_ema + a * ref)
