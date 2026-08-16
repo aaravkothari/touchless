@@ -27,7 +27,7 @@ MODEL_URL = (
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "hand_landmarker.task"
 
 # Hand landmark indices (21 per hand).
-WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_MCP, MIDDLE_TIP = 0, 4, 8, 9, 12
+WRIST, THUMB_TIP, INDEX_DIP, INDEX_TIP, MIDDLE_MCP, MIDDLE_TIP = 0, 4, 7, 8, 9, 12
 
 
 @dataclass
@@ -71,8 +71,14 @@ class HandTracker:
                 base_options=BaseOptions(model_asset_path=str(ensure_hand_model())),
                 running_mode=vision.RunningMode.VIDEO,
                 num_hands=2,
-                min_hand_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_hand_detection_confidence=cfg.hand_min_detection_confidence,
+                # Low presence threshold on purpose: every dip below it
+                # re-runs palm detection and the landmarks re-solve to a
+                # slightly different answer - a persistent step the
+                # stillness gate then has to absorb. Fewer re-solves
+                # beats faster hand-lost detection here.
+                min_hand_presence_confidence=cfg.hand_min_presence_confidence,
+                min_tracking_confidence=cfg.hand_min_tracking_confidence,
             )
         )
         self._t0 = time.monotonic()
@@ -113,7 +119,12 @@ class HandTracker:
             sample.hands.append((label, lm * np.array([w, h])))
             if label == "Right":
                 sample.pointer_ok = True
-                sample.pointer = lm[INDEX_TIP].copy()
+                # Blend the DIP joint into the pointer: the two landmarks'
+                # noise is partly independent, so the mix is quieter than
+                # the tip alone while tracking the same articulation.
+                b = self.cfg.hand_pointer_blend
+                tip = (1.0 - b) * lm[INDEX_TIP] + b * lm[INDEX_DIP]
+                sample.pointer = tip
                 size = float(np.linalg.norm(lm[MIDDLE_MCP] - lm[WRIST])) + 1e-9
                 # Hand size jitters frame to frame and multiplies straight
                 # into pointer_rel, so normalize by a smoothed size instead.
@@ -132,7 +143,7 @@ class HandTracker:
                 a = self.cfg.hand_wrist_ref_ema
                 self._ref_ema = (ref if self._ref_ema is None
                                  else (1.0 - a) * self._ref_ema + a * ref)
-                sample.pointer_rel = (lm[INDEX_TIP] - self._ref_ema) / self._size_ema
+                sample.pointer_rel = (tip - self._ref_ema) / self._size_ema
                 sample.ref_px = self._ref_ema * np.array([w, h])
             elif label == "Left":
                 sample.left_ok = True

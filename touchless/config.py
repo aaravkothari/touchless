@@ -67,6 +67,19 @@ class Config:
     hand_frame_width: int = 640
     hand_frame_height: int = 480
     hand_labels_flipped: bool = False  # flip if preview labels your hands wrong
+    # Landmarker thresholds. In VIDEO mode the palm detector is SKIPPED
+    # while hand presence stays above min_presence; every dip below it
+    # re-runs detection and the landmarks re-solve to a slightly different
+    # answer (a persistent step - the main residual jitter source). Keeping
+    # presence low means fewer re-solves while the hand is plainly in view.
+    hand_min_detection_confidence: float = 0.5
+    hand_min_presence_confidence: float = 0.3
+    hand_min_tracking_confidence: float = 0.5
+    # Pointer = (1-w)*INDEX_TIP + w*INDEX_DIP. The two landmarks' noise is
+    # partly independent, so blending cuts pointer noise ~25% while the
+    # DIP tracks nearly the same articulation (it sits one joint below the
+    # tip). 0 = pure tip.
+    hand_pointer_blend: float = 0.35
     # --- Hand-wrist mode (run --input hand-wrist) ---
     # Pointer = right index tip RELATIVE to the wrist, so moving the whole
     # hand around does nothing - only articulating the finger moves the
