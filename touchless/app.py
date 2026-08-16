@@ -22,6 +22,7 @@ from .config import Config
 from .hands import HandTracker
 from .model import GazeModel
 from .mouse import Cursor
+from .pipeline import HandPointerPipeline
 from .pursuit import PursuitData
 from .smoothing import OneEuro2D
 from .tracking import FaceSample, FaceTracker
@@ -363,30 +364,11 @@ def _run_hand(cfg: Config, wrist: bool = False):
 
     stack = _HandStack(cfg)
     cursor = Cursor(cfg.screen_inset_px)
-    gain_x = cfg.hand_wrist_gain_x if wrist else cfg.hand_gain_x
-    gain_y = cfg.hand_wrist_gain_y if wrist else cfg.hand_gain_y
-    if wrist:
-        smoother = OneEuro2D(cfg.hand_wrist_smooth_min_cutoff,
-                             cfg.hand_wrist_smooth_beta)
-    else:
-        smoother = OneEuro2D(cfg.hand_smooth_min_cutoff, cfg.hand_smooth_beta)
     screen_w, screen_h = pyautogui.size()
-    dead_x = cfg.hand_deadzone_px / screen_w
-    dead_y = cfg.hand_deadzone_px / screen_h
-    sent: tuple[float, float] | None = None  # last position actually forwarded
+    pipe = HandPointerPipeline(cfg, wrist, screen_w, screen_h)
     left_pinch = PinchHold(cfg)
     right_pinch = PinchHold(cfg)
     fps = _Fps()
-    raw_hist: deque[tuple[float, float]] = deque(maxlen=3)  # spike pre-filter
-    anchor: np.ndarray | None = None
-    # Stillness gate state: while the finger isn't deliberately moving, the
-    # anchor tracks the pointer 1:1 so landmark drift never reaches the
-    # cursor (drift is unbounded, so no deadzone could absorb it).
-    prev_pointer: np.ndarray | None = None
-    win: deque[tuple[float, np.ndarray]] = deque()  # (t, gain-scaled pointer)
-    still = False
-    lock: np.ndarray | None = None  # gain-scaled position we locked at
-    spread = 9.9
     tongue_since: float | None = None
     last_recenter = 0.0
     held: str | None = None   # which mouse button is currently down
@@ -414,75 +396,27 @@ def _run_hand(cfg: Config, wrist: bool = False):
             pred = None
             if not paused and s.pointer_ok:
                 pointer = s.pointer_rel if wrist else s.pointer
-                if anchor is None:
-                    anchor = pointer.copy()  # first sighting = neutral
-
-                # Stillness gate, positional: jitter makes instantaneous
-                # velocity useless (wrist mode never read as still), but
-                # jitter clusters around a point - so judge stillness by the
-                # spread of recent gain-scaled positions instead.
-                gp = np.array([gain_x * pointer[0], gain_y * pointer[1]])
-                win.append((now, gp))
-                while win and now - win[0][0] > cfg.hand_still_window_s:
-                    win.popleft()
-                if still:
-                    if prev_pointer is not None:
-                        # Fold landmark wander into the anchor: d stays
-                        # constant, cursor rock-solid, and when movement
-                        # resumes there's no jump and no built-up drift.
-                        anchor += pointer - prev_pointer
-                    # The lock point creeps after slow drift so drift alone
-                    # never unlocks; deliberate moves outrun it and do.
-                    lock += cfg.hand_still_lock_adapt * (gp - lock)
-                    if float(np.linalg.norm(gp - lock)) > cfg.hand_still_exit:
-                        still = False
-                        win.clear()  # relocking needs a fresh quiet window
-                elif len(win) >= 3 and now - win[0][0] >= 0.8 * cfg.hand_still_window_s:
-                    pts = np.stack([p for _, p in win])
-                    spread = float(np.max(
-                        np.linalg.norm(pts - pts.mean(axis=0), axis=1)))
-                    if spread < cfg.hand_still_enter:
-                        still = True
-                        lock = gp.copy()
-                prev_pointer = pointer.copy()
 
                 # Tongue out (held briefly) -> recenter and re-anchor.
+                recenter = False
                 if face.ok and face.tongue > cfg.tongue_threshold:
                     if tongue_since is None:
                         tongue_since = now
                     if (now - tongue_since >= cfg.tongue_hold_s
                             and now - last_recenter >= cfg.tongue_cooldown_s):
-                        anchor = pointer.copy()
-                        smoother.reset()
-                        raw_hist.clear()
+                        recenter = True
                         cursor.move_norm(0.5, 0.5)
-                        sent = (0.5, 0.5)
                         last_recenter = now
                 else:
                     tongue_since = None
 
-                d = pointer - anchor
-                nx = 0.5 - gain_x * float(d[0])  # x flipped: mirror-natural
-                ny = 0.5 + gain_y * float(d[1])
-                nx = float(np.clip(nx, -cfg.pred_clamp, 1 + cfg.pred_clamp))
-                ny = float(np.clip(ny, -cfg.pred_clamp, 1 + cfg.pred_clamp))
-                raw_hist.append((nx, ny))
-                mx = float(np.median([p[0] for p in raw_hist]))
-                my = float(np.median([p[1] for p in raw_hist]))
-                sx, sy = smoother.apply(mx, my, now)
-                # Deadzone with hysteresis: sub-pixel-scale wobble around the
-                # last sent position is swallowed; a slow drift accumulates
-                # until it clears the threshold and then goes through.
-                if (sent is None or abs(sx - sent[0]) > dead_x
-                        or abs(sy - sent[1]) > dead_y):
+                sx, sy, moved = pipe.update(pointer, now, recenter=recenter)
+                if moved:
                     cursor.move_norm(sx, sy)
-                    sent = (sx, sy)
                 pred = (sx, sy)
             else:
                 tongue_since = None  # pointer lost: hold position, reset gesture
-                prev_pointer = None
-                still = False
-                win.clear()
+                pipe.pointer_lost()
 
             # Left-hand pinches -> mouse buttons. Lost hand = huge pinch
             # value, so a held button always releases. While one button is
@@ -502,16 +436,8 @@ def _run_hand(cfg: Config, wrist: bool = False):
                 elif ev_r == "up" and held == "right":
                     release()
 
-            if still and lock is not None and prev_pointer is not None:
-                gap = float(np.linalg.norm(
-                    np.array([gain_x * prev_pointer[0], gain_y * prev_pointer[1]]) - lock))
-                still_info = (f"still LOCKED   gap {gap:.3f} "
-                              f"(> {cfg.hand_still_exit:.3f} unlocks)")
-            else:
-                still_info = (f"still live     spread {spread:.3f} "
-                              f"(< {cfg.hand_still_enter:.3f} locks)")
             lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist,
-                                    still_info)
+                                    pipe.still_info())
             cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
                                               points=_hand_points(s, show_ref=wrist)))
 
@@ -521,12 +447,7 @@ def _run_hand(cfg: Config, wrist: bool = False):
             if key == ord(" "):
                 paused = not paused
                 release()
-                smoother.reset()
-                raw_hist.clear()
-                sent = None
-                prev_pointer = None
-                still = False
-                win.clear()
+                pipe.pause_reset()
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:
