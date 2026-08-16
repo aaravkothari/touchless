@@ -28,10 +28,12 @@ class HandPointerPipeline:
         self.gain_y = cfg.hand_wrist_gain_y if wrist else cfg.hand_gain_y
         if wrist:
             self.smoother = OneEuro2D(cfg.hand_wrist_smooth_min_cutoff,
-                                      cfg.hand_wrist_smooth_beta)
+                                      cfg.hand_wrist_smooth_beta,
+                                      cfg.hand_wrist_smooth_d_cutoff)
         else:
             self.smoother = OneEuro2D(cfg.hand_smooth_min_cutoff,
-                                      cfg.hand_smooth_beta)
+                                      cfg.hand_smooth_beta,
+                                      cfg.hand_smooth_d_cutoff)
         self.dead_x = cfg.hand_deadzone_px / screen_w
         self.dead_y = cfg.hand_deadzone_px / screen_h
         self.sent: tuple[float, float] | None = None  # last position forwarded

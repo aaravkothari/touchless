@@ -56,6 +56,11 @@ class Config:
     # beta keeps fast sweeps responsive.
     hand_smooth_min_cutoff: float = 0.25
     hand_smooth_beta: float = 1.5  # high = fast sweeps cut through the filter
+    # Velocity-estimate cutoff for the beta term. Below the 1 Hz default:
+    # per-frame landmark noise has huge instantaneous velocity, and a fast
+    # d_cutoff lets that noise fire the beta boost - reducing smoothing
+    # exactly when the hand is still (the unlocked-state wobble).
+    hand_smooth_d_cutoff: float = 0.5
     # Hand mode runs its own lower camera resolution: fingertips don't need
     # 720p (that was for iris pixels) and the smaller frames roughly double
     # the frame rate of the dual-model stack.
@@ -78,6 +83,7 @@ class Config:
     # landmarks + normalization), so rest smoothing is much heavier here.
     hand_wrist_smooth_min_cutoff: float = 0.12
     hand_wrist_smooth_beta: float = 1.2
+    hand_wrist_smooth_d_cutoff: float = 0.5  # see hand_smooth_d_cutoff
     # Cursor moves smaller than this many pixels are swallowed (hysteresis:
     # slow drifts still accumulate and get through). Kills at-rest shake.
     hand_deadzone_px: int = 5

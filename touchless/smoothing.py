@@ -54,11 +54,18 @@ class OneEuro:
 
 
 class OneEuro2D:
-    """Convenience wrapper: one filter per axis, shared parameters."""
+    """Convenience wrapper: one filter per axis, shared parameters.
 
-    def __init__(self, min_cutoff: float, beta: float):
-        self.fx = OneEuro(min_cutoff=min_cutoff, beta=beta)
-        self.fy = OneEuro(min_cutoff=min_cutoff, beta=beta)
+    d_cutoff low-passes the velocity estimate that drives the beta term.
+    Lowering it below the 1 Hz default matters for jittery signals: raw
+    frame-to-frame noise has huge instantaneous velocity, so with a fast
+    d_cutoff the beta boost fires ON the noise - smoothing is reduced
+    exactly when the hand is still and needs it most.
+    """
+
+    def __init__(self, min_cutoff: float, beta: float, d_cutoff: float = 1.0):
+        self.fx = OneEuro(min_cutoff=min_cutoff, beta=beta, d_cutoff=d_cutoff)
+        self.fy = OneEuro(min_cutoff=min_cutoff, beta=beta, d_cutoff=d_cutoff)
 
     def apply(self, x: float, y: float, t: float) -> tuple[float, float]:
         return self.fx.apply(x, t), self.fy.apply(y, t)
