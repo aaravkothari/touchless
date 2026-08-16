@@ -30,13 +30,17 @@ SCREEN_W, SCREEN_H = 1920, 1080
 FPS = 30.0
 SPIKE_P = 0.04        # fraction of frames that are spike outliers
 SPIKE_MAG = 5.0       # spike magnitude, in units of sigma
-DRIFT_STD_PER_S = 0.004  # slow landmark drift ("the dots recalibrating")
+DRIFT_STD_PER_S = 0.001  # slow landmark drift ("the dots recalibrating"):
+                         # ~0.65 camera px per sqrt(s) at 640 wide, which is
+                         # already harsher than MediaPipe on a parked hand
 
 # (phase name, duration s). still1 = the core complaint: finger dead still.
-PHASES = [("still1", 10.0), ("move", 0.4), ("still2", 5.0), ("drift", 6.0)]
+# slow = a deliberate precise move well below the gate's instant-exit rate.
+PHASES = [("still1", 10.0), ("move", 0.4), ("still2", 5.0), ("slow", 4.0),
+          ("drift", 6.0)]
 
 
-def make_track(rng, sigma, step):
+def make_track(rng, sigma, step, slow):
     """(t, pointer, phase) arrays for one synthetic session."""
     ts, pts, phases = [], [], []
     t = 0.0
@@ -49,6 +53,8 @@ def make_track(rng, sigma, step):
             t += dt
             if name == "move":
                 base = base + np.array(step) / n  # linear glide
+            if name == "slow":
+                base = base + np.array(slow) / n
             if name == "drift":
                 drift = drift + rng.normal(0, DRIFT_STD_PER_S * dt ** 0.5, 2)
             p = base + drift + rng.normal(0, sigma, 2)
@@ -60,9 +66,9 @@ def make_track(rng, sigma, step):
     return np.array(ts), np.array(pts), np.array(phases)
 
 
-def run(cfg, wrist, sigma, step, seed=7):
+def run(cfg, wrist, sigma, step, slow, seed=7):
     rng = np.random.default_rng(seed)
-    ts, pts, phases = make_track(rng, sigma, step)
+    ts, pts, phases = make_track(rng, sigma, step, slow)
     pipe = HandPointerPipeline(cfg, wrist, SCREEN_W, SCREEN_H)
     px = np.zeros((len(ts), 2))     # cursor position in screen px per frame
     moved = np.zeros(len(ts), bool)
@@ -109,29 +115,46 @@ def settle_time(ts, px, phases):
     return float("inf")
 
 
-def report(label, cfg, wrist, sigmas, step):
+def slow_track_pct(px, phases, gain_x, slow):
+    """% of a slow deliberate move that actually reached the cursor
+    (the gate must not absorb slow precise motion forever)."""
+    p = px[phases == "slow"]
+    got = p[-1][0] - p[0][0]
+    ideal = -gain_x * slow[0] * SCREEN_W  # x flipped in the pipeline
+    return 100.0 * got / ideal
+
+
+def report(label, cfg, wrist, sigmas, step, slow):
+    gain_x = cfg.hand_wrist_gain_x if wrist else cfg.hand_gain_x
     print(f"\n=== {label} ===")
     hdr = (f"{'sigma':>7} | {'locked%':>7} {'moves/s':>8} {'rms_px':>7} "
-           f"{'p2p_px':>7} | {'locked%':>7} {'drift_px':>8} | {'settle_s':>8}")
+           f"{'p2p_px':>7} | {'locked%':>7} {'drift_px':>8} | {'settle_s':>8}"
+           f" {'slow%':>6}")
     print(hdr)
     print(f"{'':>7} | {'-- still (finger dead still) --':^32} "
-          f"| {'-- drift --':^18} | {'move':>8}")
+          f"| {'-- drift --':^18} | {'-- move --':>15}")
     for sigma in sigmas:
-        ts, px, moved, locked, phases = run(cfg, wrist, sigma, step)
+        ts, px, moved, locked, phases = run(cfg, wrist, sigma, step, slow)
         s1 = still_stats(ts, px, moved, locked, phases, "still1")
         dr = still_stats(ts, px, moved, locked, phases, "drift")
         st = settle_time(ts, px, phases)
+        sl = slow_track_pct(px, phases, gain_x, slow)
         print(f"{sigma:7.4f} | {s1['locked%']:7.1f} {s1['moves/s']:8.2f} "
               f"{s1['rms_px']:7.1f} {s1['p2p_px']:7.1f} "
-              f"| {dr['locked%']:7.1f} {dr['p2p_px']:8.1f} | {st:8.2f}")
+              f"| {dr['locked%']:7.1f} {dr['p2p_px']:8.1f} | {st:8.2f} "
+              f"{sl:6.1f}")
 
 
 def main():
     cfg = Config()
+    # slow: total displacement over 4s, in pointer units; scaled so the
+    # gain-scaled rate sits below the gate's instant-exit rate.
     report("hand mode (pointer = index tip, cam coords)", cfg, wrist=False,
-           sigmas=(0.001, 0.002, 0.004), step=(-0.08, 0.05))
+           sigmas=(0.001, 0.002, 0.004), step=(-0.08, 0.05),
+           slow=(-0.012, 0.0))
     report("hand-wrist mode (pointer_rel, hand-size units)", cfg, wrist=True,
-           sigmas=(0.005, 0.010, 0.020), step=(-0.20, 0.12))
+           sigmas=(0.005, 0.010, 0.020), step=(-0.20, 0.12),
+           slow=(-0.03, 0.0))
 
 
 if __name__ == "__main__":

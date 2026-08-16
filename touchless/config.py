@@ -89,7 +89,23 @@ class Config:
     # wrist mode's hand-size units) but positions still cluster tightly.
     # All distances are gain-scaled screen fractions.
     hand_still_enter: float = 0.035   # window spread below this = lock
-    hand_still_exit: float = 0.06     # stray this far from the lock = unlock
+    # The exit threshold doubles as the minimum deliberate move while
+    # locked, so keep the floor tight - robust detection (median gate
+    # signal + sustained-frames exit + noise adaptation) is what makes a
+    # tight floor safe, not headroom.
+    hand_still_exit: float = 0.035    # stray this far from the lock = unlock
+    # Slow-creep escape: a deliberate move slower than the lock EMA would
+    # otherwise be absorbed forever ("cursor stuck"). Sitting beyond half
+    # the exit threshold for this long unlocks too.
+    hand_still_creep_s: float = 0.7
+    # Relock evidence horizon: one spread-window (0.35s) cannot tell a
+    # slow deliberate move from stillness - the per-window displacement is
+    # below the noise floor. Locking additionally requires the net
+    # displacement across this longer horizon to be near zero, so a
+    # sustained slow move keeps the gate open and keeps flowing.
+    hand_still_horizon_s: float = 1.5
+    hand_still_net_mult: float = 0.5  # net displacement must be below
+                                      # this fraction of the enter threshold
     hand_still_window_s: float = 0.35  # how much recent history the spread uses
     hand_still_lock_adapt: float = 0.02  # lock point EMA/frame: slow drift
                                          # tracks, deliberate moves don't
@@ -102,11 +118,11 @@ class Config:
     # max(floor above, factor * noise) so a noisy webcam/lighting setup
     # widens the gate instead of leaving it flapping. Clean setups stay on
     # the floors.
-    hand_still_noise_enter: float = 9.0   # enter threshold, noise multiples
-    hand_still_noise_exit: float = 18.0   # exit threshold, noise multiples
-                                          # (~4.7 sigma of the gate signal:
-                                          # a sustained 3-frame crossing is
-                                          # noise-impossible, only real)
+    # Multiples of the noise scale (trimmed-mean frame delta of the gate
+    # signal, ~0.82 of its per-axis sigma). exit lands at ~4.5 sigma: a
+    # sustained 3-frame crossing is noise-impossible, only a real move.
+    hand_still_noise_enter: float = 4.0
+    hand_still_noise_exit: float = 5.5
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press

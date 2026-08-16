@@ -54,6 +54,11 @@ class HandPointerPipeline:
         self._prev_ggp: np.ndarray | None = None
         self._enter_eff = cfg.hand_still_enter  # effective thresholds (HUD)
         self._exit_eff = cfg.hand_still_exit
+        self._creep_acc = 0.0  # slow-creep escape: leaky time accumulator
+        self._creep_t: float | None = None
+        # Absorption history for the creep rollback: (t, pointer) at each
+        # absorbed frame, kept a bit longer than the creep timer.
+        self._absorb_hist: deque[tuple[float, np.ndarray]] = deque()
 
     def update(self, pointer: np.ndarray, now: float,
                recenter: bool = False) -> tuple[float, float, bool]:
@@ -79,13 +84,21 @@ class HandPointerPipeline:
         ggp = np.median(np.stack(self._gate_hist), axis=0)
         self._gp = ggp
         self.win.append((now, ggp))
-        while self.win and now - self.win[0][0] > self.cfg.hand_still_window_s:
+        while self.win and now - self.win[0][0] > self.cfg.hand_still_horizon_s:
             self.win.popleft()
         if self._prev_ggp is not None:
             self._deltas.append(float(np.linalg.norm(ggp - self._prev_ggp)))
         self._prev_ggp = ggp
         if len(self._deltas) >= 20:
-            nd = float(np.percentile(self._deltas, 25))
+            # Trimmed mean (25-75%) of the deltas, not a low percentile:
+            # the median pre-filter makes many consecutive gate values
+            # identical, so a low percentile sits on the zero-cluster
+            # boundary and oscillates ~3x window to window, alternately
+            # over-tightening the exit threshold (spurious unlocks).
+            d = np.fromiter(self._deltas, float)
+            lo, hi = np.percentile(d, [25, 75])
+            mid = d[(d >= lo) & (d <= hi)]
+            nd = float(mid.mean()) if len(mid) else 0.0
             self._enter_eff = max(self.cfg.hand_still_enter,
                                   self.cfg.hand_still_noise_enter * nd)
             self._exit_eff = max(self.cfg.hand_still_exit,
@@ -97,7 +110,43 @@ class HandPointerPipeline:
             # permanently - the spike reverts next frame but the anchor
             # doesn't, teleporting the cursor by gain*spike on every
             # spurious unlock.
-            if float(np.linalg.norm(ggp - self.lock)) > self._exit_eff:
+            gap = float(np.linalg.norm(ggp - self.lock))
+            # Slow-creep escape: a deliberate move slower than the lock
+            # EMA never reaches the exit threshold (the lock chases it,
+            # equilibrium gap = speed/adapt) - accumulating time past half
+            # the threshold unlocks anyway, so slow precise moves aren't
+            # absorbed forever. Leaky accumulator, not a hard timer: the
+            # gap rides the band with noise on top, and a hard timer
+            # resets on every one-frame dip and never fires.
+            dt = now - self._creep_t if self._creep_t is not None else 0.0
+            self._creep_t = now
+            if gap > 0.4 * self._exit_eff:
+                self._creep_acc += dt
+            else:
+                self._creep_acc = max(0.0, self._creep_acc - dt)
+            creeping = self._creep_acc >= self.cfg.hand_still_creep_s
+            if creeping:
+                self.still = False
+                self._exit_pending = 0
+                self._creep_acc = 0.0
+                self._creep_t = None
+                self.win.clear()
+                # Roll back the creep episode's absorbed motion (bounded
+                # to the last ~creep_s of history, so a long-parked drift
+                # can never fling the cursor) and hold off relocking: one
+                # spread-window can't tell this slow a move from
+                # stillness, so without the holdoff the gate would relock
+                # immediately and re-absorb the move forever.
+                cut = now - self.cfg.hand_still_creep_s
+                start = None
+                for ht, hp in self._absorb_hist:
+                    start = hp
+                    if ht >= cut:
+                        break
+                if start is not None and self._absorbed is not None:
+                    self.anchor -= self._absorbed - start
+                self._absorb_hist.clear()
+            elif gap > self._exit_eff:
                 # Excursion frames are NOT absorbed into the anchor, so d
                 # starts tracking them immediately: if the excursion recedes
                 # (noise burst) d snaps back with zero residue; if it
@@ -121,22 +170,40 @@ class HandPointerPipeline:
                 if self._absorbed is not None:
                     self.anchor += pointer - self._absorbed
                 self._absorbed = pointer.copy()
+                self._absorb_hist.append((now, pointer.copy()))
+                cut = now - self.cfg.hand_still_creep_s - 0.5
+                while self._absorb_hist and self._absorb_hist[0][0] < cut:
+                    self._absorb_hist.popleft()
                 # The lock point creeps after slow drift so drift alone
                 # never unlocks; deliberate moves outrun it and do.
                 self.lock += self.cfg.hand_still_lock_adapt * (ggp - self.lock)
         elif (len(self.win) >= 3
-              and now - self.win[0][0] >= 0.8 * self.cfg.hand_still_window_s):
-            pts = np.stack([p for _, p in self.win])
+              and now - self.win[0][0] >= 0.8 * self.cfg.hand_still_horizon_s):
+            w = self.cfg.hand_still_window_s
+            t0 = self.win[0][0]
+            recent = np.stack([p for t, p in self.win if t >= now - w])
             self.spread = float(np.max(
-                np.linalg.norm(pts - pts.mean(axis=0), axis=1)))
-            if self.spread < self._enter_eff:
+                np.linalg.norm(recent - recent.mean(axis=0), axis=1)))
+            # Slow-motion guard: spread over one short window can't see a
+            # slow move (its per-window displacement is below the noise
+            # floor), but the net displacement across the whole horizon
+            # can. Without this the gate relocks mid-move and re-absorbs
+            # the motion forever.
+            first = np.stack([p for t, p in self.win if t <= t0 + w])
+            net = float(np.linalg.norm(recent.mean(axis=0) - first.mean(axis=0)))
+            if (self.spread < self._enter_eff
+                    and net < self.cfg.hand_still_net_mult * self._enter_eff):
                 self.still = True
                 # Lock onto the cluster center, not whatever sample
                 # happened to arrive last (that can sit at the cluster
                 # edge, leaving half the exit margin already spent).
-                self.lock = pts.mean(axis=0)
+                self.lock = recent.mean(axis=0)
                 self._exit_pending = 0
+                self._creep_acc = 0.0
+                self._creep_t = None
                 self._absorbed = pointer.copy()
+                self._absorb_hist.clear()
+                self._absorb_hist.append((now, pointer.copy()))
 
         if recenter:
             self.anchor = pointer.copy()
@@ -167,6 +234,9 @@ class HandPointerPipeline:
         self._absorbed = None
         self.still = False
         self._exit_pending = 0
+        self._creep_acc = 0.0
+        self._creep_t = None
+        self._absorb_hist.clear()
         self.win.clear()
         self._prev_ggp = None  # a delta across the gap isn't a noise sample
 
@@ -178,6 +248,9 @@ class HandPointerPipeline:
         self._absorbed = None
         self.still = False
         self._exit_pending = 0
+        self._creep_acc = 0.0
+        self._creep_t = None
+        self._absorb_hist.clear()
         self.win.clear()
         self._prev_ggp = None
 
