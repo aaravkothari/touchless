@@ -50,8 +50,9 @@ class HandPointerPipeline:
         self._gate_hist: deque[np.ndarray] = deque(maxlen=3)  # gate spike filter
         self._gp: np.ndarray | None = None   # last gate signal (HUD)
         self._exit_pending = 0  # consecutive frames past the exit threshold
-        # Online noise-scale estimate: recent |delta gate signal|, read at
-        # the 25th percentile so movement periods can't inflate it.
+        # Online noise-scale estimate: recent |delta gate signal|, read as
+        # a trimmed mean so neither movement periods (top of the range) nor
+        # median-collision zeros (bottom) can skew it.
         self._deltas: deque[float] = deque(maxlen=60)
         self._prev_ggp: np.ndarray | None = None
         self._enter_eff = cfg.hand_still_enter  # effective thresholds (HUD)
@@ -135,10 +136,10 @@ class HandPointerPipeline:
                 self.win.clear()
                 # Roll back the creep episode's absorbed motion (bounded
                 # to the last ~creep_s of history, so a long-parked drift
-                # can never fling the cursor) and hold off relocking: one
-                # spread-window can't tell this slow a move from
-                # stillness, so without the holdoff the gate would relock
-                # immediately and re-absorb the move forever.
+                # can never fling the cursor): the slow move lands where
+                # the finger's cumulative motion says it should, smoothed
+                # into a quick glide by the One Euro stage. The horizon
+                # guard on relocking then keeps the move flowing.
                 cut = now - self.cfg.hand_still_creep_s
                 start = None
                 for ht, hp in self._absorb_hist:
@@ -240,6 +241,7 @@ class HandPointerPipeline:
         self._creep_t = None
         self._absorb_hist.clear()
         self.win.clear()
+        self._gate_hist.clear()  # median across the gap would mix positions
         self._prev_ggp = None  # a delta across the gap isn't a noise sample
 
     def pause_reset(self):
@@ -254,6 +256,7 @@ class HandPointerPipeline:
         self._creep_t = None
         self._absorb_hist.clear()
         self.win.clear()
+        self._gate_hist.clear()
         self._prev_ggp = None
 
     def still_info(self) -> str:
