@@ -48,6 +48,12 @@ class HandPointerPipeline:
         self._gate_hist: deque[np.ndarray] = deque(maxlen=3)  # gate spike filter
         self._gp: np.ndarray | None = None   # last gate signal (HUD)
         self._exit_pending = 0  # consecutive frames past the exit threshold
+        # Online noise-scale estimate: recent |delta gate signal|, read at
+        # the 25th percentile so movement periods can't inflate it.
+        self._deltas: deque[float] = deque(maxlen=60)
+        self._prev_ggp: np.ndarray | None = None
+        self._enter_eff = cfg.hand_still_enter  # effective thresholds (HUD)
+        self._exit_eff = cfg.hand_still_exit
 
     def update(self, pointer: np.ndarray, now: float,
                recenter: bool = False) -> tuple[float, float, bool]:
@@ -75,6 +81,15 @@ class HandPointerPipeline:
         self.win.append((now, ggp))
         while self.win and now - self.win[0][0] > self.cfg.hand_still_window_s:
             self.win.popleft()
+        if self._prev_ggp is not None:
+            self._deltas.append(float(np.linalg.norm(ggp - self._prev_ggp)))
+        self._prev_ggp = ggp
+        if len(self._deltas) >= 20:
+            nd = float(np.percentile(self._deltas, 25))
+            self._enter_eff = max(self.cfg.hand_still_enter,
+                                  self.cfg.hand_still_noise_enter * nd)
+            self._exit_eff = max(self.cfg.hand_still_exit,
+                                 self.cfg.hand_still_noise_exit * nd)
         if self.still:
             # Exit test FIRST: the frame that breaks the lock must NOT be
             # folded into the anchor. Absorb-then-unlock bakes the breaking
@@ -82,7 +97,7 @@ class HandPointerPipeline:
             # permanently - the spike reverts next frame but the anchor
             # doesn't, teleporting the cursor by gain*spike on every
             # spurious unlock.
-            if float(np.linalg.norm(ggp - self.lock)) > self.cfg.hand_still_exit:
+            if float(np.linalg.norm(ggp - self.lock)) > self._exit_eff:
                 # Excursion frames are NOT absorbed into the anchor, so d
                 # starts tracking them immediately: if the excursion recedes
                 # (noise burst) d snaps back with zero residue; if it
@@ -114,7 +129,7 @@ class HandPointerPipeline:
             pts = np.stack([p for _, p in self.win])
             self.spread = float(np.max(
                 np.linalg.norm(pts - pts.mean(axis=0), axis=1)))
-            if self.spread < self.cfg.hand_still_enter:
+            if self.spread < self._enter_eff:
                 self.still = True
                 # Lock onto the cluster center, not whatever sample
                 # happened to arrive last (that can sit at the cluster
@@ -153,6 +168,7 @@ class HandPointerPipeline:
         self.still = False
         self._exit_pending = 0
         self.win.clear()
+        self._prev_ggp = None  # a delta across the gap isn't a noise sample
 
     def pause_reset(self):
         """Pause toggled: drop all filter state so resume starts clean."""
@@ -163,12 +179,13 @@ class HandPointerPipeline:
         self.still = False
         self._exit_pending = 0
         self.win.clear()
+        self._prev_ggp = None
 
     def still_info(self) -> str:
         """[STILL] HUD line for threshold tuning."""
         if self.still and self.lock is not None and self._gp is not None:
             gap = float(np.linalg.norm(self._gp - self.lock))
             return (f"still LOCKED   gap {gap:.3f} "
-                    f"(> {self.cfg.hand_still_exit:.3f} unlocks)")
+                    f"(> {self._exit_eff:.3f} unlocks)")
         return (f"still live     spread {self.spread:.3f} "
-                f"(< {self.cfg.hand_still_enter:.3f} locks)")
+                f"(< {self._enter_eff:.3f} locks)")

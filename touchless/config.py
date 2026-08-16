@@ -96,6 +96,17 @@ class Config:
     hand_still_exit_frames: int = 3   # excursion must persist this many
                                       # consecutive frames to unlock (a
                                       # 1-2 frame noise burst can't)
+    # Noise-adaptive thresholds: the pipeline estimates the setup's noise
+    # scale online (25th percentile of recent frame-to-frame gate deltas -
+    # deliberate movement can't inflate a low quantile) and uses
+    # max(floor above, factor * noise) so a noisy webcam/lighting setup
+    # widens the gate instead of leaving it flapping. Clean setups stay on
+    # the floors.
+    hand_still_noise_enter: float = 9.0   # enter threshold, noise multiples
+    hand_still_noise_exit: float = 18.0   # exit threshold, noise multiples
+                                          # (~4.7 sigma of the gate signal:
+                                          # a sustained 3-frame crossing is
+                                          # noise-impossible, only real)
     pinch_click_threshold: float = 0.35   # pinch dist below this = button DOWN
     pinch_release_threshold: float = 0.45  # ...and back above this = button UP
     pinch_refractory_s: float = 0.15  # min gap between a release and next press

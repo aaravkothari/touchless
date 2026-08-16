@@ -99,11 +99,12 @@ def settle_time(ts, px, phases):
     final still2 position (responsiveness guard: smoothing must not lag)."""
     final = np.median(px[phases == "still2"][-60:], axis=0)
     t_start = ts[phases == "move"][0]
-    tail = ts >= t_start
+    tail = ((ts >= t_start)  # judge move + still2 only, drift wanders later
+            & ((phases == "move") | (phases == "still2")))
     dev = np.linalg.norm(px[tail] - final, axis=1)
     ok = dev < 15.0
     for i in range(len(ok)):
-        if ok[i:].all() or (ok[i] and ts[tail][i] > t_start + 3.0):
+        if ok[i:].all():
             return float(ts[tail][i] - t_start)
     return float("inf")
 
