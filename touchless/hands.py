@@ -40,6 +40,9 @@ class HandSample:
     pointer: np.ndarray | None = None   # (2,) right index tip, normalized cam coords
     pointer_rel: np.ndarray | None = None  # (2,) (index tip - palm centroid) / hand
                                            # size: hand-position/depth-invariant
+    ref: np.ndarray | None = None       # (2,) palm-MCP centroid, RAW normalized
+                                        # cam coords (arm-gate classifier input;
+                                        # EMA'd would lag arm-onset detection)
     ref_px: np.ndarray | None = None    # (2,) palm-centroid focus point, px (HUD)
     left_ok: bool = False
     pinch_index: float = 9.9            # left thumb<->index dist / hand size
@@ -142,6 +145,7 @@ class HandTracker:
                 # motion, which wrist mode ignores by design, so the lag
                 # is nearly free.
                 ref = lm[list(PALM_MCPS)].mean(axis=0)
+                sample.ref = ref
                 a = self.cfg.hand_wrist_ref_ema
                 self._ref_ema = (ref if self._ref_ema is None
                                  else (1.0 - a) * self._ref_ema + a * ref)
