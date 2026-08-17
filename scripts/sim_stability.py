@@ -24,7 +24,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from touchless.config import Config  # noqa: E402
-from touchless.pipeline import HandPointerPipeline  # noqa: E402
+from touchless.pipeline import ArmGate, HandPointerPipeline  # noqa: E402
 
 SCREEN_W, SCREEN_H = 1920, 1080
 FPS = 30.0
@@ -155,6 +155,138 @@ def report(label, cfg, wrist, sigmas, step, slow):
               f"{sl:6.1f}")
 
 
+# Hand-pure mode phases: whole-arm glides must freeze the cursor, tip-only
+# articulation must track, and combo (arm + finger together) must freeze
+# (finger input is discarded during arm motion by design).
+PURE_PHASES = [("still1", 10.0), ("arm", 0.8), ("still2", 5.0),
+               ("finger", 0.4), ("still3", 4.0), ("armslow", 3.0),
+               ("combo", 0.6), ("still4", 2.0)]
+
+
+def make_track_pure(rng, sigma, arm, finger, armslow, combo_arm, combo_finger):
+    """(t, tip, ref, phase) arrays. Tip and ref share the arm motion,
+    drift, and re-detection steps (a re-detection re-solves all 21
+    landmarks together, so the step is common-mode); only the tip carries
+    articulation and spike frames, and the ref jitters at half sigma
+    (4-landmark average)."""
+    ts, tips, refs, phases = [], [], [], []
+    t = 0.0
+    base_arm = np.zeros(2)   # whole-hand position (common-mode)
+    base_fin = np.zeros(2)   # articulation offset (tip only)
+    drift = np.zeros(2)
+    for name, dur in PURE_PHASES:
+        n = int(dur * FPS)
+        for _ in range(n):
+            dt = (1.0 / FPS) * rng.uniform(0.85, 1.15)
+            t += dt
+            if rng.random() < dt / REDETECT_EVERY_S:
+                drift = drift + rng.normal(0, REDETECT_STEP_MULT * sigma, 2)
+            if name == "arm":
+                base_arm = base_arm + np.array(arm) / n
+            if name == "finger":
+                base_fin = base_fin + np.array(finger) / n
+            if name == "armslow":
+                base_arm = base_arm + np.array(armslow) / n
+            if name == "combo":
+                base_arm = base_arm + np.array(combo_arm) / n
+                base_fin = base_fin + np.array(combo_finger) / n
+            tip = base_arm + base_fin + drift + rng.normal(0, sigma, 2)
+            if rng.random() < SPIKE_P:
+                tip = tip + rng.normal(0, SPIKE_MAG * sigma, 2)
+            ref = base_arm + drift + rng.normal(0, sigma / 2, 2)
+            ts.append(t)
+            tips.append(tip)
+            refs.append(ref)
+            phases.append(name)
+    return np.array(ts), np.array(tips), np.array(refs), np.array(phases)
+
+
+def run_pure(cfg, sigma, arm, finger, armslow, combo_arm, combo_finger, seed=7):
+    rng = np.random.default_rng(seed)
+    ts, tips, refs, phases = make_track_pure(rng, sigma, arm, finger,
+                                             armslow, combo_arm, combo_finger)
+    gate = ArmGate(cfg)
+    pipe = HandPointerPipeline(cfg, False, SCREEN_W, SCREEN_H)
+    px = np.zeros((len(ts), 2))
+    moved = np.zeros(len(ts), bool)
+    locked = np.zeros(len(ts), bool)
+    armmov = np.zeros(len(ts), bool)
+    cur = None
+    for i, (t, tip, ref) in enumerate(zip(ts, tips, refs)):
+        virtual = gate.update(tip.copy(), ref.copy(), float(t))
+        sx, sy, m = pipe.update(virtual, float(t))
+        if m or cur is None:
+            cur = (sx * SCREEN_W, sy * SCREEN_H)
+        px[i] = cur
+        moved[i] = m
+        locked[i] = pipe.still
+        armmov[i] = gate.moving
+    return ts, px, moved, locked, armmov, phases
+
+
+def _phase_end_px(ts, px, phases, name, tail_s=1.0):
+    """Median cursor position over the last tail_s of a phase."""
+    sel = phases == name
+    t1 = ts[sel][-1]
+    return np.median(px[sel & (ts >= t1 - tail_s)], axis=0)
+
+
+def leak_px(ts, px, phases, move_name, ref_name, after_s=0.5):
+    """Max cursor deviation during an arm phase (plus a short aftermath)
+    from where it sat before - the headline metric, target ~0."""
+    ref = _phase_end_px(ts, px, phases, ref_name)
+    sel = phases == move_name
+    t1 = ts[sel][-1]
+    sel = sel | ((ts > t1) & (ts <= t1 + after_s))
+    return float(np.max(np.linalg.norm(px[sel] - ref, axis=1)))
+
+
+def detect_lag_frames(armmov, phases, name="arm"):
+    """Frames from arm-phase start until the gate reads MOVING (budget: 3,
+    the downstream gate's pending-frame allowance)."""
+    idx = np.where(phases == name)[0]
+    for n, i in enumerate(idx):
+        if armmov[i]:
+            return n
+    return -1  # never detected
+
+
+def finger_track_pct(ts, px, phases, gain_x, finger):
+    """% of the tip-only move that reached the cursor (the arm gate must
+    not blunt normal pointing)."""
+    before = _phase_end_px(ts, px, phases, "still2", tail_s=0.5)
+    # Measure at the END of still3: at high sigma the downstream pipeline
+    # delivers the move as a slow catch-up glide (~3.5s, same as baseline
+    # hand mode) - measuring mid-glide would blame the arm gate for it.
+    after = _phase_end_px(ts, px, phases, "still3", tail_s=1.0)
+    ideal = -gain_x * finger[0] * SCREEN_W  # x flipped in the pipeline
+    return 100.0 * (after[0] - before[0]) / ideal
+
+
+def report_pure(cfg, sigmas, arm=(-0.15, 0.08), finger=(-0.08, 0.05),
+                armslow=(-0.09, 0.0), combo_arm=(-0.10, 0.05),
+                combo_finger=(0.05, -0.03)):
+    print("\n=== hand-pure mode (tip absolute, arm-translation freeze) ===")
+    hdr = (f"{'sigma':>7} | {'locked%':>7} {'rms_px':>7} {'p2p_px':>7} "
+           f"| {'leak_px':>7} {'lag_fr':>6} | {'slow_lk':>7} | {'trk%':>6} "
+           f"| {'combo_lk':>8}")
+    print(hdr)
+    print(f"{'':>7} | {'-- still1 --':^23} | {'-- arm --':^14} "
+          f"| {'armslw':^7} | {'finger':^6} | {'combo':^8}")
+    for sigma in sigmas:
+        ts, px, moved, locked, armmov, phases = run_pure(
+            cfg, sigma, arm, finger, armslow, combo_arm, combo_finger)
+        s1 = still_stats(ts, px, moved, locked, phases, "still1")
+        lk = leak_px(ts, px, phases, "arm", "still1")
+        lag = detect_lag_frames(armmov, phases, "arm")
+        slk = leak_px(ts, px, phases, "armslow", "still3")
+        trk = finger_track_pct(ts, px, phases, cfg.hand_gain_x, finger)
+        clk = leak_px(ts, px, phases, "combo", "armslow")
+        print(f"{sigma:7.4f} | {s1['locked%']:7.1f} {s1['rms_px']:7.1f} "
+              f"{s1['p2p_px']:7.1f} | {lk:7.1f} {lag:6d} | {slk:7.1f} "
+              f"| {trk:6.1f} | {clk:8.1f}")
+
+
 def main():
     cfg = Config()
     # slow: total displacement over 4s, in pointer units; scaled so the
@@ -165,6 +297,7 @@ def main():
     report("hand-wrist mode (pointer_rel, hand-size units)", cfg, wrist=True,
            sigmas=(0.005, 0.010, 0.020), step=(-0.20, 0.12),
            slow=(-0.03, 0.0))
+    report_pure(cfg, sigmas=(0.001, 0.002, 0.004))
 
 
 if __name__ == "__main__":
