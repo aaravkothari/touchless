@@ -12,7 +12,7 @@ app-shell work.
 ## Quick start
 
 ```powershell
-# one-time setup
+# one-time setup (Python 3.13)
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
