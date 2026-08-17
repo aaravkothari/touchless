@@ -308,3 +308,244 @@ class HandPointerPipeline:
                     f"(> {self._exit_eff:.3f} unlocks)")
         return (f"still live     spread {self.spread:.3f} "
                 f"(< {self._enter_eff:.3f} locks)")
+
+
+class ArmGate:
+    """(tip, ref) -> virtual pointer that ignores whole-arm translation.
+
+    Hand-pure mode's upstream stage: the virtual pointer tracks the
+    absolute tip 1:1 while the arm is still (pure-x,y feel), but FREEZES
+    while the palm-MCP centroid (ref) is translating - whole-arm motion,
+    which drags tip and ref together, never reaches the cursor. Finger
+    articulation during an arm move is discarded by design, not queued.
+
+    Representation: virtual = tip - offset. ARM-STILL keeps the offset
+    constant; ARM-MOVING folds every tip delta into the offset, so the
+    virtual holds exactly and release resumes with no jump. Only the
+    virtual's DELTAS matter downstream (HandPointerPipeline is
+    anchor-relative), so the offset coexists with the anchor, the
+    stillness gate, and the recenter gesture.
+
+    Detection is positional over a short window (never instantaneous
+    velocity - see the stillness-gate rationale above), with the same
+    trimmed-mean noise adaptation. Arm-onset inevitably leaks 2-3 frames
+    of motion; the transition rolls the window's tip motion back into the
+    offset, and the downstream gate - which holds pending excursions
+    unmoved and absorbs receding ones with zero residue - turns a
+    from-rest arm move into literally zero cursor motion.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.moving = False
+        self.offset = np.zeros(2)
+        self._last_tip: np.ndarray | None = None
+        self._gap_tip: np.ndarray | None = None  # last tip before a loss
+        self._moving_since: float | None = None
+        self._ref_hist: deque[np.ndarray] = deque(maxlen=3)  # spike filter
+        self._win: deque[tuple[float, np.ndarray]] = deque()  # (t, filtered ref)
+        self._tip_win: deque[tuple[float, np.ndarray]] = deque()  # (t, raw tip)
+        # Noise scale from still-period ref deltas only: during an arm move
+        # every delta IS movement, so the trimmed mean can't save a
+        # contaminated deque the way it does downstream.
+        self._deltas: deque[float] = deque(maxlen=60)
+        self._prev_gref: np.ndarray | None = None
+        self._enter_pending = 0
+        self._enter_eff = cfg.hand_pure_arm_enter    # effective thresholds (HUD)
+        self._settle_eff = cfg.hand_pure_arm_settle
+        self._disp = 0.0  # last window displacement (HUD)
+        self._reacquire = False
+        # When the gate last released to STILL: rollback never reaches
+        # behind this, so motion a previous MOVING period already absorbed
+        # into the offset can't be subtracted twice (double-subtraction
+        # flings the virtual backwards).
+        self._still_t = float("-inf")
+
+    @staticmethod
+    def _at_window_start(win, now, span, floor=float("-inf")):
+        """First sample at or after max(now-span, floor) (newest sample
+        before it if the window is still filling)."""
+        target = max(now - span, floor)
+        p0 = None
+        for t, p in win:
+            p0 = p
+            if t >= target:
+                break
+        return p0
+
+    @staticmethod
+    def _win_mean(win, t0, t1):
+        """Mean of samples in [t0, t1] (None if the span is empty)."""
+        pts = [p for t, p in win if t0 <= t <= t1]
+        return np.mean(np.stack(pts), axis=0) if pts else None
+
+    def update(self, tip: np.ndarray, ref: np.ndarray, now: float) -> np.ndarray:
+        cfg = self.cfg
+        if self._reacquire:
+            # Hand re-entered the frame: wherever it reappeared, that
+            # relocation IS arm motion - absorb the whole gap so the
+            # cursor holds, and start MOVING until settle confirms
+            # (reacquisition frames are re-detection-noisy).
+            if self._gap_tip is not None:
+                self.offset += tip - self._gap_tip
+            self._gap_tip = None
+            self._reacquire = False
+            self.moving = True
+            self._moving_since = now
+
+        self._ref_hist.append(ref)
+        gref = np.median(np.stack(self._ref_hist), axis=0)
+        keep = max(cfg.hand_pure_arm_window_s, cfg.hand_pure_arm_settle_s,
+                   cfg.hand_pure_arm_slow_window_s)
+        self._win.append((now, gref))
+        while self._win and now - self._win[0][0] > keep:
+            self._win.popleft()
+        self._tip_win.append((now, tip.copy()))
+        while self._tip_win and now - self._tip_win[0][0] > cfg.hand_pure_rollback_s:
+            self._tip_win.popleft()
+        if self._prev_gref is not None and not self.moving:
+            self._deltas.append(float(np.linalg.norm(gref - self._prev_gref)))
+        self._prev_gref = gref
+        if len(self._deltas) >= 20:
+            d = np.fromiter(self._deltas, float)
+            lo, hi = np.percentile(d, [25, 75])
+            mid = d[(d >= lo) & (d <= hi)]
+            nd = float(mid.mean()) if len(mid) else 0.0
+            self._enter_eff = max(cfg.hand_pure_arm_enter,
+                                  cfg.hand_pure_arm_noise_enter * nd)
+            self._settle_eff = max(cfg.hand_pure_arm_settle,
+                                   cfg.hand_pure_arm_noise_settle * nd)
+
+        w = cfg.hand_pure_arm_window_s
+        ref0 = self._at_window_start(self._win, now, w)
+        tip0 = self._at_window_start(self._tip_win, now, w)
+        self._disp = (float(np.linalg.norm(gref - ref0))
+                      if ref0 is not None else 0.0)
+
+        if self.moving:
+            if self._last_tip is not None:
+                self.offset += tip - self._last_tip  # virtual frozen exactly
+            settled = False
+            if (self._moving_since is not None
+                    and now - self._moving_since >= cfg.hand_pure_arm_min_move_s
+                    and self._win
+                    and now - self._win[0][0] >= 0.8 * cfg.hand_pure_arm_settle_s):
+                recent = np.stack([p for t, p in self._win
+                                   if t >= now - cfg.hand_pure_arm_settle_s])
+                spread = float(np.max(
+                    np.linalg.norm(recent - recent.mean(axis=0), axis=1)))
+                # Spread-based release: noise can't fake a settle mid-move
+                # the way a single small frame delta could.
+                settled = spread < self._settle_eff
+            if settled:
+                self.moving = False
+                self._moving_since = None
+                self._enter_pending = 0
+                self._still_t = now
+        else:
+            tip_disp = (float(np.linalg.norm(tip - tip0))
+                        if tip0 is not None else 0.0)
+            # Coherence: arm translation moves ref and tip together
+            # (ratio ~1), a finger wag only rocks the palm (~0.1-0.3) -
+            # without this test, vigorous deliberate pointing would
+            # intermittently freeze the cursor. When the tip is barely
+            # moving the test passes trivially and ref motion decides.
+            fast = (self._disp > self._enter_eff
+                    and self._disp > cfg.hand_pure_arm_coherence * tip_disp)
+            # Slow-motion test: a slow arm glide's per-window displacement
+            # hides under the noise-adapted threshold, but jitter's net
+            # displacement does NOT grow with the window while a real
+            # glide's does - so the SAME threshold over a longer baseline
+            # separates them (the downstream gate's horizon guard,
+            # inverted). Compared via short sub-window MEANS at each end,
+            # not endpoint samples: the noise-delta-calibrated threshold
+            # is far too tight for two raw samples 0.6s apart (their
+            # difference has full marginal variance), and every false
+            # onset injects a permanent rollback step into the virtual.
+            sw = cfg.hand_pure_arm_slow_window_s
+            slow = False
+            if self._win and now - self._win[0][0] >= 0.8 * sw:
+                m = cfg.hand_pure_arm_window_s
+                rs = self._win_mean(self._win, now - sw, now - sw + m)
+                re = self._win_mean(self._win, now - m, now)
+                ta = self._win_mean(self._tip_win, now - sw, now - sw + m)
+                tb = self._win_mean(self._tip_win, now - m, now)
+                if rs is not None and re is not None:
+                    sdisp = float(np.linalg.norm(re - rs))
+                    stip_disp = (float(np.linalg.norm(tb - ta))
+                                 if ta is not None and tb is not None else 0.0)
+                    slow = (sdisp > self._enter_eff
+                            and sdisp > cfg.hand_pure_arm_coherence * stip_disp)
+            # No onsets until the noise estimator has samples: on a noisy
+            # setup the floors are too tight for the first ~0.7s, and
+            # every false onset injects a permanent rollback step into
+            # the virtual (startup cursor wander).
+            if (fast or slow) and len(self._deltas) >= 20:
+                self._enter_pending += 1
+            else:
+                self._enter_pending = 0
+            if self._enter_pending >= cfg.hand_pure_arm_enter_frames:
+                # Onset: rewind the leaked frames over the window that saw
+                # the motion, but never past the last release (_still_t):
+                # motion absorbed by a previous MOVING period must not be
+                # subtracted twice. Slow-only detection means the whole
+                # span moved coherently, so rewinding it rewinds arm
+                # motion, not finger intent - and its start point is a
+                # sub-window mean, so a noise spike can't become the
+                # rollback target. The receding excursion is absorbed
+                # downstream with zero residue when the gate is locked;
+                # when unlocked the One Euro turns it into a small wiggle
+                # - do NOT reset the smoother here, that jump would be
+                # worse.
+                w = cfg.hand_pure_arm_window_s
+                span = w if fast else sw
+                if self._still_t > now - span:
+                    # Re-firing shortly after a release: the exact
+                    # continuity point is the tip at release time. A mean
+                    # CENTERED on it stays unbiased under a steady glide
+                    # (the absorbed pre-half cancels the leaked post-half)
+                    # instead of handing back half a sub-window of leak
+                    # per settle/re-freeze cycle - that bias ratchets.
+                    back = self._win_mean(self._tip_win,
+                                          self._still_t - w / 2,
+                                          self._still_t + w / 2)
+                elif fast:
+                    back = self._at_window_start(self._tip_win, now, w)
+                else:
+                    back = self._win_mean(self._tip_win, now - sw,
+                                          now - sw + w)
+                if back is not None:
+                    self.offset += tip - back
+                self.moving = True
+                self._moving_since = now
+                self._enter_pending = 0
+
+        self._last_tip = tip.copy()
+        return tip - self.offset
+
+    def lost(self):
+        """Right hand left the frame: hold the virtual, remember the last
+        tip so the reacquisition gap can be absorbed (keep the offset)."""
+        if self._last_tip is not None:
+            self._gap_tip = self._last_tip
+        self._last_tip = None
+        self.moving = False
+        self._moving_since = None
+        self._enter_pending = 0
+        self._ref_hist.clear()  # median across the gap would mix positions
+        self._win.clear()
+        self._tip_win.clear()
+        self._prev_gref = None  # a delta across the gap isn't a noise sample
+        self._reacquire = True
+
+    def reset(self):
+        """Pause toggled: same handling as a lost pointer."""
+        self.lost()
+
+    def info(self) -> str:
+        """[ARM] HUD line for threshold tuning."""
+        if self.moving:
+            return (f"arm  MOVING (frozen)  disp {self._disp:.4f} "
+                    f"(spread < {self._settle_eff:.4f} releases)")
+        return (f"arm  still            disp {self._disp:.4f} "
+                f"(> {self._enter_eff:.4f} freezes)")

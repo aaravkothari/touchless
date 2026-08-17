@@ -98,6 +98,45 @@ class Config:
     hand_wrist_smooth_min_cutoff: float = 0.12
     hand_wrist_smooth_beta: float = 1.2
     hand_wrist_smooth_d_cutoff: float = 0.5  # see hand_smooth_d_cutoff
+    # --- Hand-pure mode (run --input hand-pure) ---
+    # Pointer = the ABSOLUTE index tip (hand-mode units and gains), but an
+    # upstream arm gate FREEZES the cursor while the palm centroid is
+    # translating: whole-arm motion (reaching, shifting posture) never
+    # moves the cursor; only articulation over a still arm does. Freeze is
+    # total by design - finger motion during an arm move is discarded, not
+    # queued. NOTE: these thresholds are in RAW camera units, unlike the
+    # hand_still_* gate which works in gain-scaled units - don't tune one
+    # against the other without dividing by the gain (~6x).
+    hand_pure_arm_window_s: float = 0.15   # onset window: ~4-5 frames at
+                                           # 30fps; detection must land inside
+                                           # the downstream gate's 3-pending-
+                                           # frame budget for zero-leak onsets
+    hand_pure_arm_enter: float = 0.004     # net ref displacement over the
+                                           # window (~2.5 px @640): floor above
+                                           # a clean ref's random-walk net
+    hand_pure_arm_noise_enter: float = 6.0  # noisy setups: window-net of a
+                                            # random walk is ~2.7x the frame
+                                            # noise scale; 6x can't be noise
+    hand_pure_arm_enter_frames: int = 2    # median already blocks single
+                                           # spikes; 2 keeps latency in budget
+    hand_pure_arm_coherence: float = 0.5   # ref must move at least this
+                                           # fraction of the tip's window
+                                           # motion: arm translation is
+                                           # common-mode (~1.0), a finger wag
+                                           # only rocks the palm (~0.1-0.3)
+    hand_pure_arm_slow_window_s: float = 0.6  # slow-motion horizon: i.i.d.
+                                              # jitter's net displacement does
+                                              # NOT grow with the window, but a
+                                              # slow arm glide's does - the same
+                                              # threshold over this longer
+                                              # baseline catches drifts the
+                                              # short window can't see
+    hand_pure_arm_min_move_s: float = 0.15  # debounce before the settle test
+    hand_pure_arm_settle_s: float = 0.25   # release: ref spread window
+    hand_pure_arm_settle: float = 0.0025   # spread floor for "arm settled"
+    hand_pure_arm_noise_settle: float = 4.0
+    hand_pure_rollback_s: float = 0.7      # tip history horizon for the onset
+                                           # rollback (>= slow window + margin)
     # Cursor moves smaller than this many pixels are swallowed (hysteresis:
     # slow drifts still accumulate and get through). Kills at-rest shake.
     hand_deadzone_px: int = 5
