@@ -22,7 +22,7 @@ from .config import Config
 from .hands import HandTracker
 from .model import GazeModel
 from .mouse import Cursor
-from .pipeline import HandPointerPipeline
+from .pipeline import ArmGate, HandPointerPipeline
 from .pursuit import PursuitData
 from .smoothing import OneEuro2D
 from .tracking import FaceSample, FaceTracker
@@ -88,7 +88,8 @@ def _face_hud_extras(s):
     return s.landmarks[list(_HUD_LANDMARKS)], s.depth
 
 
-def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still_info=None):
+def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still_info=None,
+                    arm_info=None):
     lines = [f"{status}   {fps:4.1f} fps"]
     if s.pointer_ok:
         if wrist:
@@ -97,6 +98,8 @@ def _hand_telemetry(s, face, fps, status, held=None, wrist=False, still_info=Non
         else:
             lines.append(f"RIGHT pointer ({s.pointer[0]:.2f}, "
                          f"{s.pointer[1]:.2f})  <- moves")
+        if arm_info:
+            lines.append(arm_info)
         if still_info:
             lines.append(still_info)
     else:
@@ -144,8 +147,8 @@ class _Fps:
 
 def preview(cfg: Config, input_mode: str = "gaze"):
     """Show tracking output. Use this to verify lighting/camera before calibrating."""
-    if input_mode in ("hand", "hand-wrist"):
-        _preview_hand(cfg, wrist=input_mode == "hand-wrist")
+    if input_mode in ("hand", "hand-wrist", "hand-pure"):
+        _preview_hand(cfg, mode=input_mode)
         return
     model = _load_model(cfg)  # optional: shows live prediction if calibrated
     tracker = FaceTracker(cfg)
@@ -200,19 +203,30 @@ class _HandStack:
         self.camera.close()
 
 
-def _preview_hand(cfg: Config, wrist: bool = False):
+def _preview_hand(cfg: Config, mode: str = "hand"):
+    wrist = mode == "hand-wrist"
+    pure = mode == "hand-pure"
     stack = _HandStack(cfg)
     fps = _Fps()
-    label = "hand-wrist preview" if wrist else "hand preview"
+    gate = ArmGate(cfg) if pure else None  # throwaway: arm line in the HUD
+    label = f"{mode} preview"
     try:
         while True:
             frame, s, face = stack.read()
             if frame is None:
                 continue
+            arm_info = None
+            if gate is not None:
+                if s.pointer_ok:
+                    gate.update(s.pointer, s.ref, time.monotonic())
+                    arm_info = gate.info()
+                else:
+                    gate.lost()
             lines = _hand_telemetry(s, face, fps.tick(), f"{label} - q to quit",
-                                    wrist=wrist)
+                                    wrist=wrist, arm_info=arm_info)
             cv2.imshow("touchless preview",
-                       _draw_hud(frame, lines, points=_hand_points(s, show_ref=wrist)))
+                       _draw_hud(frame, lines,
+                                 points=_hand_points(s, show_ref=wrist or pure)))
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
@@ -244,11 +258,11 @@ def retrain(cfg: Config):
 
 def run(cfg: Config, click_mode: str, log_path: str | None = None,
         input_mode: str = "gaze"):
-    if input_mode in ("hand", "hand-wrist"):
+    if input_mode in ("hand", "hand-wrist", "hand-pure"):
         if click_mode != "off":
             print("note: hand mode has a fixed control scheme (left-hand "
                   "pinches click, tongue recenters) - ignoring --click")
-        _run_hand(cfg, wrist=input_mode == "hand-wrist", log_path=log_path)
+        _run_hand(cfg, mode=input_mode, log_path=log_path)
         return
     if click_mode == "pinch":
         print("--click pinch is part of hand mode; gaze mode supports "
@@ -339,7 +353,7 @@ def run(cfg: Config, click_mode: str, log_path: str | None = None,
         cv2.destroyAllWindows()
 
 
-def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
+def _run_hand(cfg: Config, mode: str = "hand", log_path: str | None = None):
     """Hand mode: cursor = center + gain * (right index tip - anchor).
 
     x is flipped so moving your hand right moves the cursor right on an
@@ -347,14 +361,23 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
     LEFT thumb+middle pinch = right button (held pinch = held button),
     tongue out = recenter + re-anchor.
 
-    wrist=True (hand-wrist mode): identical scheme, but the pointer is the
-    index tip RELATIVE to the palm-knuckle centroid (hand-size units), so
-    moving the whole arm/hand holds position and only finger articulation
-    moves the cursor.
+    mode="hand-wrist": identical scheme, but the pointer is the index tip
+    RELATIVE to the palm-knuckle centroid (hand-size units), so moving the
+    whole arm/hand holds position and only finger articulation moves the
+    cursor.
+
+    mode="hand-pure": the absolute tip again (hand-mode feel), but an
+    ArmGate pre-stage freezes the cursor while the palm centroid is
+    translating - whole-arm motion never moves the cursor.
     """
+    wrist = mode == "hand-wrist"
+    pure = mode == "hand-pure"
     if wrist:
         print("Hand-wrist mode. RIGHT index finger RELATIVE TO YOUR PALM "
               "moves the cursor - moving the whole arm/hand does nothing.")
+    elif pure:
+        print("Hand-pure mode. RIGHT index finger moves the cursor, but "
+              "while the whole arm/hand is moving the cursor FREEZES.")
     else:
         print("Hand mode. RIGHT index finger moves the cursor.")
     print("LEFT thumb+index pinch = left click (hold to drag).")
@@ -367,6 +390,7 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
     cursor = Cursor(cfg.screen_inset_px)
     screen_w, screen_h = pyautogui.size()
     pipe = HandPointerPipeline(cfg, wrist, screen_w, screen_h)
+    gate = ArmGate(cfg) if pure else None
     left_pinch = PinchHold(cfg)
     right_pinch = PinchHold(cfg)
     fps = _Fps()
@@ -379,9 +403,18 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
     if log_path:
         log_fh = open(log_path, "w", newline="")
         log_writer = csv.writer(log_fh)
-        log_writer.writerow(["t", "raw_x", "raw_y", "gate_x", "gate_y",
-                             "still", "spread", "enter_eff", "exit_eff",
-                             "smooth_x", "smooth_y", "moved"])
+        if pure:
+            # Raw tip + ref alongside the virtual: a capture can be
+            # replayed offline through a re-tuned ArmGate without a camera.
+            log_writer.writerow(["t", "tip_x", "tip_y", "ref_x", "ref_y",
+                                 "virt_x", "virt_y", "arm_moving", "arm_disp",
+                                 "arm_enter_eff", "gate_x", "gate_y",
+                                 "still", "spread", "enter_eff", "exit_eff",
+                                 "smooth_x", "smooth_y", "moved"])
+        else:
+            log_writer.writerow(["t", "raw_x", "raw_y", "gate_x", "gate_y",
+                                 "still", "spread", "enter_eff", "exit_eff",
+                                 "smooth_x", "smooth_y", "moved"])
 
     def press(button: str):
         nonlocal held
@@ -404,7 +437,12 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
             status = "PAUSED (space to resume)" if paused else "LIVE - q quit, space pause"
             pred = None
             if not paused and s.pointer_ok:
-                pointer = s.pointer_rel if wrist else s.pointer
+                if pure:
+                    pointer = gate.update(s.pointer, s.ref, now)
+                elif wrist:
+                    pointer = s.pointer_rel
+                else:
+                    pointer = s.pointer
 
                 # Tongue out (held briefly) -> recenter and re-anchor.
                 recenter = False
@@ -424,16 +462,25 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
                     cursor.move_norm(sx, sy)
                 pred = (sx, sy)
                 if log_writer is not None:
-                    log_writer.writerow(
-                        [f"{now:.3f}",
-                         f"{pointer[0]:.5f}", f"{pointer[1]:.5f}",
-                         f"{pipe._gp[0]:.5f}", f"{pipe._gp[1]:.5f}",
-                         int(pipe.still), f"{pipe.spread:.5f}",
-                         f"{pipe._enter_eff:.5f}", f"{pipe._exit_eff:.5f}",
-                         f"{sx:.5f}", f"{sy:.5f}", int(moved)])
+                    row = [f"{now:.3f}"]
+                    if pure:
+                        row += [f"{s.pointer[0]:.5f}", f"{s.pointer[1]:.5f}",
+                                f"{s.ref[0]:.5f}", f"{s.ref[1]:.5f}",
+                                f"{pointer[0]:.5f}", f"{pointer[1]:.5f}",
+                                int(gate.moving), f"{gate._disp:.5f}",
+                                f"{gate._enter_eff:.5f}"]
+                    else:
+                        row += [f"{pointer[0]:.5f}", f"{pointer[1]:.5f}"]
+                    row += [f"{pipe._gp[0]:.5f}", f"{pipe._gp[1]:.5f}",
+                            int(pipe.still), f"{pipe.spread:.5f}",
+                            f"{pipe._enter_eff:.5f}", f"{pipe._exit_eff:.5f}",
+                            f"{sx:.5f}", f"{sy:.5f}", int(moved)]
+                    log_writer.writerow(row)
             else:
                 tongue_since = None  # pointer lost: hold position, reset gesture
                 pipe.pointer_lost()
+                if gate is not None:
+                    gate.lost()
 
             # Left-hand pinches -> mouse buttons. Lost hand = huge pinch
             # value, so a held button always releases. While one button is
@@ -454,9 +501,11 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
                     release()
 
             lines = _hand_telemetry(s, face, fps.tick(), status, held, wrist,
-                                    pipe.still_info())
-            cv2.imshow("touchless", _draw_hud(frame, lines, pred, scale=0.5,
-                                              points=_hand_points(s, show_ref=wrist)))
+                                    pipe.still_info(),
+                                    gate.info() if gate is not None else None)
+            cv2.imshow("touchless",
+                       _draw_hud(frame, lines, pred, scale=0.5,
+                                 points=_hand_points(s, show_ref=wrist or pure)))
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -465,6 +514,8 @@ def _run_hand(cfg: Config, wrist: bool = False, log_path: str | None = None):
                 paused = not paused
                 release()
                 pipe.pause_reset()
+                if gate is not None:
+                    gate.reset()
     except pyautogui.FailSafeException:
         print("Fail-safe triggered (mouse in top-left corner). Stopped.")
     finally:

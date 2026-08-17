@@ -15,7 +15,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_prev = sub.add_parser("preview", help="visualize tracking, no cursor control")
-    p_prev.add_argument("--input", choices=["gaze", "hand", "hand-wrist"],
+    p_prev.add_argument("--input",
+                        choices=["gaze", "hand", "hand-wrist", "hand-pure"],
                         default="gaze", help="what to track (default gaze)")
 
     sub.add_parser("calibrate",
@@ -25,12 +26,15 @@ def main():
                    help="refit the model from the recorded pursuit session (no camera)")
 
     p_run = sub.add_parser("run", help="drive the cursor")
-    p_run.add_argument("--input", choices=["gaze", "hand", "hand-wrist"],
+    p_run.add_argument("--input",
+                       choices=["gaze", "hand", "hand-wrist", "hand-pure"],
                        default="gaze",
                        help="gaze = eyes+head (calibrate first); "
                             "hand = right index finger, no calibration needed; "
                             "hand-wrist = index finger relative to the palm "
-                            "(moving the whole arm/hand doesn't move the cursor)")
+                            "(moving the whole arm/hand doesn't move the cursor); "
+                            "hand-pure = index finger absolute position, but "
+                            "whole-arm motion is frozen out")
     p_run.add_argument("--click", choices=["off", "dwell", "blink", "pinch"],
                        default="off",
                        help="click method (default off; pinch is hand-mode only)")
