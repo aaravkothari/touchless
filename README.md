@@ -2,7 +2,7 @@
 
 Control your mouse cursor with your eyes + head using a plain webcam.
 
-This is the Python MVP of a project that will eventually become a Tauri app.
+This is the initial Python version of a project that will eventually become a Tauri app.
 The goal of this stage is to **finalize the tracking/control pipeline** —
 calibration, the learned gaze model, smoothing, click gestures — before any
 app-shell work
